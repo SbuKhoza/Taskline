@@ -24,6 +24,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "b0556841-8b58-48f2-b0f8-af1528546645"
+      }
+    },
+    "owner": "sbudamalloya"
   }
 }
