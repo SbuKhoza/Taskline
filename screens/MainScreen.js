@@ -1,4 +1,5 @@
 "use client"
+
 import {
   View,
   Text,
@@ -12,14 +13,24 @@ import {
   Platform,
   Image,
   ActivityIndicator,
-  RefreshControl, // Import RefreshControl
+  RefreshControl,
 } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import DateTimePickerModal from "react-native-modal-datetime-picker"
-import { useState, useEffect, useCallback } from "react" // Import useCallback
-import { db, auth } from "../firebase/config" // Corrected import path
-import { collection, addDoc, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from "firebase/firestore"
-import { useNavigation } from "@react-navigation/native" // Import useNavigation
+import { useState, useEffect, useCallback } from "react"
+import { db, auth } from "../firebase/config"
+import {
+  collection,
+  addDoc,
+  query,
+  where,
+  onSnapshot,
+  doc,
+  updateDoc,
+  serverTimestamp,
+  getDoc,
+} from "firebase/firestore"
+import { useNavigation } from "@react-navigation/native"
 
 // Placeholder avatars - replace with actual blob URLs if available
 const avatars = {
@@ -29,15 +40,13 @@ const avatars = {
   user3: "https://blob.v0.dev/pjtmy8OGJ.png",
 }
 
-// MainScreen now accepts 'user' as a prop
 const MainScreen = ({ user }) => {
-  const navigation = useNavigation() // Initialize navigation hook
-
-  // --- ADDED LOG: Check user prop immediately ---
+  const navigation = useNavigation()
   console.log("MainScreen received user prop:", user ? user.uid : "null")
 
   const [tasks, setTasks] = useState([])
   const [loadingTasks, setLoadingTasks] = useState(true)
+  const [fetchedUsername, setFetchedUsername] = useState(null) // State for fetched username
   const [showModal, setShowModal] = useState(false)
   const [editingTask, setEditingTask] = useState(null)
   const [selectedDate, setSelectedDate] = useState(new Date())
@@ -63,24 +72,55 @@ const MainScreen = ({ user }) => {
     recurringTime: new Date(),
   })
   const [showMoreModal, setShowMoreModal] = useState(false)
-
-  // --- Refresh state for pull-to-refresh ---
   const [refreshing, setRefreshing] = useState(false)
-  const [refreshKey, setRefreshKey] = useState(0) // Key to force useEffect re-run
+  const [refreshKey, setRefreshKey] = useState(0)
 
-  // --- Firebase Data Fetching (now dependent on the 'user' prop and refreshKey) ---
+  // Effect to fetch username from Firestore
+  useEffect(() => {
+    let ignore = false
+    async function getUserProfile() {
+      if (!user || !user.uid) {
+        setFetchedUsername(null)
+        return
+      }
+      try {
+        // Assuming 'users' collection and document ID is the user's UID
+        const userDocRef = doc(db, "users", user.uid)
+        const docSnap = await getDoc(userDocRef)
+        if (!ignore && docSnap.exists()) {
+          const userData = docSnap.data()
+          setFetchedUsername(userData.name || null) // Assuming 'name' field in user document
+        } else if (!ignore) {
+          console.log("No user document found in 'users' collection for UID:", user.uid)
+          setFetchedUsername(null)
+        }
+      } catch (error) {
+        if (!ignore) {
+          console.error("Error fetching user profile:", error)
+          setFetchedUsername(null)
+        }
+      }
+    }
+    getUserProfile()
+    return () => {
+      ignore = true
+    }
+  }, [user]) // Re-run when user object changes
+
+  // Firebase Data Fetching (now dependent on the 'user' prop and refreshKey)
   useEffect(() => {
     if (!user) {
       console.log("Firestore listener not set up: User is null.")
-      setTasks([]) // Clear tasks if no user is logged in
+      setTasks([])
       setLoadingTasks(false)
-      setRefreshing(false) // Stop refreshing if no user
+      setRefreshing(false)
       return
     }
     console.log("Setting up Firestore listener for user:", user.uid, "with refreshKey:", refreshKey)
-    setLoadingTasks(true) // Indicate loading when listener is set up or refreshed
+    setLoadingTasks(true)
     const tasksCollectionRef = collection(db, "tasks")
     const q = query(tasksCollectionRef, where("userId", "==", user.uid))
+
     const unsubscribeFirestore = onSnapshot(
       q,
       (snapshot) => {
@@ -92,7 +132,7 @@ const MainScreen = ({ user }) => {
         }))
         setTasks(fetchedTasks)
         setLoadingTasks(false)
-        setRefreshing(false) // Stop refreshing once data is fetched
+        setRefreshing(false)
         console.log("Fetched tasks from Firestore:", fetchedTasks.length, "tasks.")
         if (fetchedTasks.length === 0) {
           console.log("No tasks found for this user. Check Firestore 'tasks' collection and 'userId' field.")
@@ -101,31 +141,29 @@ const MainScreen = ({ user }) => {
       (error) => {
         console.error("Error fetching tasks: ", error)
         setLoadingTasks(false)
-        setRefreshing(false) // Stop refreshing on error
+        setRefreshing(false)
         alert("Failed to load tasks. Please try again.")
       },
     )
+
     return () => {
       console.log("Unsubscribing from Firestore listener.")
       unsubscribeFirestore()
     }
-  }, [user, refreshKey]) // Re-run when user object or refreshKey changes
+  }, [user, refreshKey])
 
-  // Function to handle pull-to-refresh
   const onRefresh = useCallback(() => {
     setRefreshing(true)
-    setRefreshKey((prevKey) => prevKey + 1) // Increment key to trigger useEffect
+    setRefreshKey((prevKey) => prevKey + 1)
   }, [])
 
-  // Helper function to check if a recurring task is completed for a specific date
   const isTaskCompletedForDate = (taskId, date) => {
     const originalTask = tasks.find((t) => t.id === taskId)
-    if (!originalTask || !originalTask.recurring) return false // Only applies to recurring tasks
+    if (!originalTask || !originalTask.recurring) return false
     const dateStr = date.toDateString()
     return (originalTask.completedInstances || []).includes(dateStr)
   }
 
-  // Helper function to get next occurrence of a recurring task
   const getNextOccurrence = (date, frequency, recurringDays, recurringTime) => {
     const nextDate = new Date(date)
     switch (frequency) {
@@ -176,6 +214,7 @@ const MainScreen = ({ user }) => {
         while (currentDate <= endDate) {
           let shouldAddInstance = false
           const instanceDate = new Date(currentDate)
+
           if (task.recurringFrequency === "Custom") {
             if (task.recurringDays.includes(currentDate.getDay())) {
               shouldAddInstance = true
@@ -190,6 +229,7 @@ const MainScreen = ({ user }) => {
           } else {
             shouldAddInstance = true
           }
+
           if (shouldAddInstance) {
             const isCompleted = isTaskCompletedForDate(task.id, instanceDate)
             expandedTasks.push({
@@ -214,7 +254,6 @@ const MainScreen = ({ user }) => {
       const isOriginalTaskValid = originalTask && !originalTask.deleted && !originalTask.archived
       const taskDate = new Date(task.instanceDate)
       const isDateMatch = taskDate.toDateString() === selectedDate.toDateString()
-      // --- ADDED LOG: Detailed filtering info ---
       console.log(
         `Filtering task: ${task.title} | Instance Date: ${task.instanceDate.toDateString()} | Selected Date: ${selectedDate.toDateString()} | Date Match: ${isDateMatch} | Original Task Valid: ${isOriginalTaskValid} | Result: ${isOriginalTaskValid && isDateMatch}`,
       )
@@ -236,6 +275,7 @@ const MainScreen = ({ user }) => {
       recurringDays: [],
       recurringTime: now,
     })
+
     let hours = now.getHours()
     const minutes = now.getMinutes()
     let ampm = "AM"
@@ -273,7 +313,6 @@ const MainScreen = ({ user }) => {
   }
 
   const handleSave = async () => {
-    // --- ADDED LOG: Check user before saving ---
     console.log("Attempting to save task. Current user:", user ? user.uid : "null")
     if (!form.title.trim()) {
       alert("Task title cannot be empty.")
@@ -332,7 +371,7 @@ const MainScreen = ({ user }) => {
       deleted: false,
       color: ["#4A90E2", "#7ED321", "#D0021B", "#F5A623", "#9B59B6"][Math.floor(Math.random() * 5)],
       avatar: avatars.user1,
-      userId: user.uid, // Associate with current user
+      userId: user.uid,
       completedInstances: [],
     }
 
@@ -403,6 +442,7 @@ const MainScreen = ({ user }) => {
         const dateStr = new Date(taskToComplete.instanceDate).toDateString()
         const originalTask = tasks.find((t) => t.id === originalTaskId)
         let currentCompletedInstances = originalTask.completedInstances || []
+
         if (isTaskCompletedForDate(taskToComplete.originalTaskId, taskToComplete.instanceDate)) {
           currentCompletedInstances = currentCompletedInstances.filter(
             (completionDateStr) => completionDateStr !== dateStr,
@@ -501,6 +541,7 @@ const MainScreen = ({ user }) => {
   }
 
   const allExpandedTasks = getExpandedTasks()
+
   const deletedTasks = allExpandedTasks
     .filter((task) => {
       const originalTask = tasks.find((t) => t.id === task.originalTaskId || t.id === task.id)
@@ -657,7 +698,6 @@ const MainScreen = ({ user }) => {
     setShowMoreModal(false)
     try {
       await auth.signOut()
-      // The onAuthStateChanged listener in App.js will handle the navigation
       alert("Logged out successfully!")
     } catch (error) {
       console.error("Error logging out:", error)
@@ -669,13 +709,16 @@ const MainScreen = ({ user }) => {
     <View style={styles.container}>
       {/* Top Header with Greeting and Notification */}
       <View style={styles.topHeader}>
-        <Text style={styles.greetingText}>{getGreeting()}</Text>
+        <View>
+          <Text style={styles.greetingText}>{getGreeting()}</Text>
+          {user && fetchedUsername && <Text style={styles.usernameText}>{fetchedUsername}</Text>}
+        </View>
         <TouchableOpacity onPress={() => console.log("Notifications clicked")}>
           <Ionicons name="notifications-outline" size={24} color="#f8f8f8" />
         </TouchableOpacity>
       </View>
 
-      {loadingTasks && refreshing ? ( // Show loading overlay only if initially loading or refreshing
+      {loadingTasks && refreshing ? (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color="#0077b6" />
           <Text style={styles.loadingText}>Loading tasks...</Text>
@@ -892,7 +935,6 @@ const MainScreen = ({ user }) => {
                           </TouchableOpacity>
                         ))}
                       </View>
-
                       <Text style={styles.label}>Recurring Time</Text>
                       <TouchableOpacity
                         onPress={() => openCustomTimePicker("recurringTime")}
@@ -996,6 +1038,7 @@ const MainScreen = ({ user }) => {
                   if (currentEditingTimeTarget === "mainDate" && isToday && displayHour24 < currentHour24) {
                     return null
                   }
+
                   return (
                     <TouchableOpacity
                       key={hour}
@@ -1033,6 +1076,7 @@ const MainScreen = ({ user }) => {
                   ) {
                     return null
                   }
+
                   return (
                     <TouchableOpacity
                       key={minute}
@@ -1126,9 +1170,11 @@ const MainScreen = ({ user }) => {
                 startDate.setDate(startDate.getDate() - firstDayOfMonth.getDay())
                 const currentDate = new Date(startDate)
                 currentDate.setDate(startDate.getDate() + i)
+
                 const isCurrentMonth = currentDate.getMonth() === currentMonthView.getMonth()
                 const isToday = currentDate.toDateString() === today.toDateString()
                 const isSelected = currentDate.toDateString() === selectedDate.toDateString()
+
                 return (
                   <TouchableOpacity
                     key={i}
@@ -1266,7 +1312,7 @@ const MainScreen = ({ user }) => {
                 : tab === "More"
                   ? () => setShowMoreModal(true)
                   : tab === "Profile"
-                    ? () => navigation.navigate("Profile") // Navigate to ProfileScreen
+                    ? () => navigation.navigate("Profile")
                     : () => setActiveTab(tab)
             }
             style={styles.navItem}
@@ -1298,13 +1344,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
   },
   greetingText: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: "700",
     color: "#f8f8f8",
   },
+  usernameText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#ccc",
+    marginTop: 2,
+  },
   mainCard: {
     flex: 1,
-    width: "99%",
+    width: "100%",
     backgroundColor: "#2C2F33",
     borderRadius: 25,
     paddingHorizontal: 20,
@@ -1343,27 +1395,25 @@ const styles = StyleSheet.create({
   },
   calendarContainer: {
     marginBottom: 20,
-   
-    
   },
   calendarScroll: {
     paddingVertical: 5,
   },
   dayBlock: {
-    paddingVertical: 5, // Reduced padding
-    paddingHorizontal: 12, // Reduced padding
-    marginRight: 8, // Reduced margin
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    marginRight: 8,
     backgroundColor: "#3A3D42",
     borderRadius: 10,
-    height: 45, // Reduced height
+    height: 45,
     justifyContent: "center",
     alignItems: "center",
   },
   selectedDayBlock: {
     backgroundColor: "#D0021B",
   },
-  dayLabel: { fontSize: 12, fontWeight: "500", textAlign: "center", color: "#ccc" }, // Reduced font size
-  dayNumber: { fontSize: 14, fontWeight: "700", textAlign: "center", color: "#f8f8f8", marginTop: 0 }, // Reduced font size
+  dayLabel: { fontSize: 12, fontWeight: "500", textAlign: "center", color: "#ccc" },
+  dayNumber: { fontSize: 14, fontWeight: "700", textAlign: "center", color: "#f8f8f8", marginTop: 0 },
   selectedDayLabel: {
     color: "#fff",
   },
@@ -1375,11 +1425,11 @@ const styles = StyleSheet.create({
     height: 3,
     borderRadius: 1.5,
     backgroundColor: "#fff",
-    marginTop: 2, // Adjusted margin
+    marginTop: 2,
   },
   timelineScrollView: {
     flex: 1,
-    paddingHorizontal: 4,
+    paddingHorizontal: 2,
   },
   timelineContent: {
     position: "relative",
@@ -1419,10 +1469,10 @@ const styles = StyleSheet.create({
   taskTimelineItem: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 12,
+    paddingVertical: 10,
     paddingHorizontal: 15,
     borderRadius: 25,
-    marginBottom: 10,
+    marginBottom: 0,
     minHeight: 50,
     flex: 1,
   },

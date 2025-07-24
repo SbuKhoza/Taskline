@@ -1,40 +1,31 @@
-"use client"
 import { useState, useEffect } from "react"
 import { View, Text, StyleSheet, TouchableOpacity, Image, ScrollView, Platform, TextInput } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import { useNavigation } from "@react-navigation/native"
-
-// Import auth and db directly from your provided firebaseConfig.js
-import { auth, db } from "../firebase/config" // Adjust the import path as necessary
-import { onAuthStateChanged, updatePassword } from "firebase/auth" // Import modular auth functions
-// Import modular Firestore functions
+import { auth, db } from "../firebase/config"
+import { onAuthStateChanged, updatePassword } from "firebase/auth"
 import { collection, doc, getDoc, setDoc, query, where, getDocs } from "firebase/firestore"
 
 const ProfileScreen = () => {
   const navigation = useNavigation()
-
   const [user, setUser] = useState(null)
   const [profileData, setProfileData] = useState({
     name: "",
     email: "",
     phoneNumber: "",
-    bio: "Passionate about productivity and task management. Always looking for new ways to optimize my workflow!",
-    avatar: "https://blob.v0.dev/pjtmy8OGJ.png", // Placeholder avatar
-    memberSince: "January 2023",
-    totalTasks: 150,
-    completedTasks: 120,
+    avatar: "https://blob.v0.dev/pjtmy8OGJ.png",
+    totalTasks: 0,
+    completedTasks: 0,
   })
 
   const [usernameInput, setUsernameInput] = useState("")
   const [phoneNumberInput, setPhoneNumberInput] = useState("")
   const [newPassword, setNewPassword] = useState("")
   const [confirmNewPassword, setConfirmNewPassword] = useState("")
-
   const [passwordError, setPasswordError] = useState("")
   const [phoneNumberError, setPhoneNumberError] = useState("")
   const [profileUpdateMessage, setProfileUpdateMessage] = useState("")
   const [passwordUpdateMessage, setPasswordUpdateMessage] = useState("")
-
   const [isEditingProfile, setIsEditingProfile] = useState(false)
   const [isChangingPassword, setIsChangingPassword] = useState(false)
 
@@ -43,8 +34,6 @@ const ProfileScreen = () => {
       if (currentUser) {
         setUser(currentUser)
         setProfileData((prev) => ({ ...prev, email: currentUser.email }))
-
-        // Fetch user data from Firestore using modular syntax
         const userDocRef = doc(db, "users", currentUser.uid)
         const docSnap = await getDoc(userDocRef)
 
@@ -54,28 +43,42 @@ const ProfileScreen = () => {
             ...prev,
             name: data.name || "",
             phoneNumber: data.phoneNumber || "",
-            // Keep other fields as they are if not in Firestore or not meant to be updated
           }))
           setUsernameInput(data.name || "")
           setPhoneNumberInput(data.phoneNumber || "")
         } else {
-          // If user document doesn't exist, create a basic one with email and UID
           await setDoc(
             userDocRef,
             {
               email: currentUser.email,
               uid: currentUser.uid,
-              name: currentUser.displayName || "", // Use display name if available
+              name: currentUser.displayName || "",
               phoneNumber: "",
             },
-            { merge: true },
+            { merge: true }
           )
           setUsernameInput(currentUser.displayName || "")
         }
+
+        // 🔄 Fetch user-specific task stats
+        try {
+          const tasksRef = collection(db, "tasks")
+          const q = query(tasksRef, where("userId", "==", currentUser.uid))
+          const querySnapshot = await getDocs(q)
+
+          const total = querySnapshot.size
+          const completed = querySnapshot.docs.filter((doc) => doc.data().status === "completed").length
+
+          setProfileData((prev) => ({
+            ...prev,
+            totalTasks: total,
+            completedTasks: completed,
+          }))
+        } catch (err) {
+          console.error("Error fetching task stats:", err)
+        }
       } else {
         setUser(null)
-        // Optionally redirect to login if no user
-        // navigation.navigate('Login'); // Example for navigation
       }
     })
 
@@ -83,47 +86,30 @@ const ProfileScreen = () => {
   }, [])
 
   const validatePassword = (password) => {
-    if (password.length < 8) {
-      return "Password must be at least 8 characters long."
-    }
-    if (!/[A-Z]/.test(password)) {
-      return "Password must contain at least one uppercase letter."
-    }
-    if (!/[a-z]/.test(password)) {
-      return "Password must contain at least one lowercase letter."
-    }
-    if (!/[0-9]/.test(password)) {
-      return "Password must contain at least one digit."
-    }
-    if (!/[^a-zA-Z0-9]/.test(password)) {
-      return "Password must contain at least one special character."
-    }
+    if (password.length < 8) return "Password must be at least 8 characters long."
+    if (!/[A-Z]/.test(password)) return "Password must contain at least one uppercase letter."
+    if (!/[a-z]/.test(password)) return "Password must contain at least one lowercase letter."
+    if (!/[0-9]/.test(password)) return "Password must contain at least one digit."
+    if (!/[^a-zA-Z0-9]/.test(password)) return "Password must contain at least one special character."
     return ""
   }
 
   const handleUpdateProfile = async () => {
     setProfileUpdateMessage("")
     setPhoneNumberError("")
+    if (!user) return setProfileUpdateMessage("User not logged in.")
 
-    if (!user) {
-      setProfileUpdateMessage("User not logged in.")
-      return
-    }
-
-    // Phone number validation
     const phoneNumberRegex = /^0[0-9]{9}$/
     if (phoneNumberInput && !phoneNumberRegex.test(phoneNumberInput)) {
       setPhoneNumberError("Phone number must start with 0 and be 10 digits long.")
       return
     }
 
-    // Check phone number uniqueness if it's changed and not empty
     if (phoneNumberInput && phoneNumberInput !== profileData.phoneNumber) {
       try {
         const usersCollectionRef = collection(db, "users")
         const q = query(usersCollectionRef, where("phoneNumber", "==", phoneNumberInput))
         const querySnapshot = await getDocs(q)
-
         if (!querySnapshot.empty) {
           setPhoneNumberError("This phone number is already in use by another user.")
           return
@@ -142,10 +128,10 @@ const ProfileScreen = () => {
         {
           name: usernameInput,
           phoneNumber: phoneNumberInput,
-          email: user.email, // Ensure email is also saved/updated in Firestore
+          email: user.email,
           uid: user.uid,
         },
-        { merge: true },
+        { merge: true }
       )
 
       setProfileData((prev) => ({
@@ -164,33 +150,18 @@ const ProfileScreen = () => {
   const handleChangePassword = async () => {
     setPasswordUpdateMessage("")
     setPasswordError("")
-
-    if (!user) {
-      setPasswordUpdateMessage("User not logged in.")
-      return
-    }
-
-    const newPasswordValidation = validatePassword(newPassword)
-    if (newPasswordValidation) {
-      setPasswordError(newPasswordValidation)
-      return
-    }
-
+    if (!user) return setPasswordUpdateMessage("User not logged in.")
+    const validation = validatePassword(newPassword)
+    if (validation) return setPasswordError(validation)
     if (newPassword !== confirmNewPassword) {
-      setPasswordError("New password and confirm password do not match.")
-      return
+      return setPasswordError("New password and confirm password do not match.")
     }
 
-    // Firebase's updatePassword might require recent login.
-    // If you encounter 'auth/requires-recent-login', you'll need to re-authenticate the user
-    // (e.g., by asking them to log in again or using a re-authentication method).
-    // For simplicity, explicit re-authentication is not implemented here.
     try {
       await updatePassword(user, newPassword)
       setPasswordUpdateMessage("Password updated successfully!")
       setNewPassword("")
       setConfirmNewPassword("")
-      setPasswordError("") // Clear any previous password errors
       setIsChangingPassword(false)
     } catch (error) {
       console.error("Error changing password:", error)
@@ -211,6 +182,7 @@ const ProfileScreen = () => {
         <Text style={styles.headerTitle}>Profile</Text>
         <View style={styles.headerRight} />
       </View>
+
       <ScrollView contentContainerStyle={styles.scrollViewContent}>
         <View style={styles.profileCard}>
           <Image source={{ uri: profileData.avatar }} style={styles.avatar} />
@@ -229,16 +201,6 @@ const ProfileScreen = () => {
             </View>
           </View>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>About Me</Text>
-            <Text style={styles.sectionContent}>{profileData.bio}</Text>
-          </View>
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Member Since</Text>
-            <Text style={styles.sectionContent}>{profileData.memberSince}</Text>
-          </View>
-
-          {/* Profile Edit Section */}
           {!isEditingProfile ? (
             <TouchableOpacity style={styles.editProfileButton} onPress={() => setIsEditingProfile(true)}>
               <Text style={styles.editProfileButtonText}>Edit Profile</Text>
@@ -277,8 +239,8 @@ const ProfileScreen = () => {
                   style={styles.cancelButton}
                   onPress={() => {
                     setIsEditingProfile(false)
-                    setUsernameInput(profileData.name) // Reset to current data
-                    setPhoneNumberInput(profileData.phoneNumber) // Reset to current data
+                    setUsernameInput(profileData.name)
+                    setPhoneNumberInput(profileData.phoneNumber)
                     setPhoneNumberError("")
                     setProfileUpdateMessage("")
                   }}
@@ -289,7 +251,6 @@ const ProfileScreen = () => {
             </View>
           )}
 
-          {/* Password Change Section */}
           {!isChangingPassword ? (
             <TouchableOpacity style={styles.editProfileButton} onPress={() => setIsChangingPassword(true)}>
               <Text style={styles.editProfileButtonText}>Change Password</Text>
