@@ -1,5 +1,4 @@
 "use client"
-
 import {
   View,
   Text,
@@ -14,6 +13,7 @@ import {
   Image,
   ActivityIndicator,
   RefreshControl,
+  Alert,
 } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import DateTimePickerModal from "react-native-modal-datetime-picker"
@@ -29,24 +29,24 @@ import {
   updateDoc,
   serverTimestamp,
   getDoc,
+  deleteDoc,
 } from "firebase/firestore"
 import { useNavigation } from "@react-navigation/native"
 
-// Placeholder avatars - replace with actual blob URLs if available
+// Placeholder avatars
 const avatars = {
-  profile: "https://blob.v0.dev/pjtmy8OGJ.png", // Main profile avatar
+  profile: "https://blob.v0.dev/pjtmy8OGJ.png",
   user1: "https://blob.v0.dev/pjtmy8OGJ.png",
   user2: "https://blob.v0.dev/pjtmy8OGJ.png",
   user3: "https://blob.v0.dev/pjtmy8OGJ.png",
 }
 
-const MainScreen = ({ user }) => {
+const MainScreen = ({ user, theme, darkMode }) => {
   const navigation = useNavigation()
   console.log("MainScreen received user prop:", user ? user.uid : "null")
-
   const [tasks, setTasks] = useState([])
   const [loadingTasks, setLoadingTasks] = useState(true)
-  const [fetchedUsername, setFetchedUsername] = useState(null) // State for fetched username
+  const [fetchedUsername, setFetchedUsername] = useState(null)
   const [showModal, setShowModal] = useState(false)
   const [editingTask, setEditingTask] = useState(null)
   const [selectedDate, setSelectedDate] = useState(new Date())
@@ -75,6 +75,9 @@ const MainScreen = ({ user }) => {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
 
+  // Create dynamic styles based on theme
+  const styles = createStyles(theme)
+
   // Effect to fetch username from Firestore
   useEffect(() => {
     let ignore = false
@@ -84,12 +87,11 @@ const MainScreen = ({ user }) => {
         return
       }
       try {
-        // Assuming 'users' collection and document ID is the user's UID
         const userDocRef = doc(db, "users", user.uid)
         const docSnap = await getDoc(userDocRef)
         if (!ignore && docSnap.exists()) {
           const userData = docSnap.data()
-          setFetchedUsername(userData.name || null) // Assuming 'name' field in user document
+          setFetchedUsername(userData.name || null)
         } else if (!ignore) {
           console.log("No user document found in 'users' collection for UID:", user.uid)
           setFetchedUsername(null)
@@ -105,9 +107,9 @@ const MainScreen = ({ user }) => {
     return () => {
       ignore = true
     }
-  }, [user]) // Re-run when user object changes
+  }, [user])
 
-  // Firebase Data Fetching (now dependent on the 'user' prop and refreshKey)
+  // Firebase Data Fetching
   useEffect(() => {
     if (!user) {
       console.log("Firestore listener not set up: User is null.")
@@ -120,7 +122,6 @@ const MainScreen = ({ user }) => {
     setLoadingTasks(true)
     const tasksCollectionRef = collection(db, "tasks")
     const q = query(tasksCollectionRef, where("userId", "==", user.uid))
-
     const unsubscribeFirestore = onSnapshot(
       q,
       (snapshot) => {
@@ -145,7 +146,6 @@ const MainScreen = ({ user }) => {
         alert("Failed to load tasks. Please try again.")
       },
     )
-
     return () => {
       console.log("Unsubscribing from Firestore listener.")
       unsubscribeFirestore()
@@ -214,7 +214,6 @@ const MainScreen = ({ user }) => {
         while (currentDate <= endDate) {
           let shouldAddInstance = false
           const instanceDate = new Date(currentDate)
-
           if (task.recurringFrequency === "Custom") {
             if (task.recurringDays.includes(currentDate.getDay())) {
               shouldAddInstance = true
@@ -229,7 +228,6 @@ const MainScreen = ({ user }) => {
           } else {
             shouldAddInstance = true
           }
-
           if (shouldAddInstance) {
             const isCompleted = isTaskCompletedForDate(task.id, instanceDate)
             expandedTasks.push({
@@ -254,9 +252,6 @@ const MainScreen = ({ user }) => {
       const isOriginalTaskValid = originalTask && !originalTask.deleted && !originalTask.archived
       const taskDate = new Date(task.instanceDate)
       const isDateMatch = taskDate.toDateString() === selectedDate.toDateString()
-      console.log(
-        `Filtering task: ${task.title} | Instance Date: ${task.instanceDate.toDateString()} | Selected Date: ${selectedDate.toDateString()} | Date Match: ${isDateMatch} | Original Task Valid: ${isOriginalTaskValid} | Result: ${isOriginalTaskValid && isDateMatch}`,
-      )
       return isOriginalTaskValid && isDateMatch
     })
     .sort((a, b) => new Date(a.instanceDate) - new Date(b.instanceDate))
@@ -275,7 +270,6 @@ const MainScreen = ({ user }) => {
       recurringDays: [],
       recurringTime: now,
     })
-
     let hours = now.getHours()
     const minutes = now.getMinutes()
     let ampm = "AM"
@@ -322,7 +316,6 @@ const MainScreen = ({ user }) => {
       alert("You must be logged in to save tasks.")
       return
     }
-
     const finalMainDate = new Date(form.date)
     let mainHour = tempSelectedHour
     if (tempSelectedAmPm === "PM" && mainHour !== 12) {
@@ -331,7 +324,6 @@ const MainScreen = ({ user }) => {
       mainHour = 0
     }
     finalMainDate.setHours(mainHour, tempSelectedMinute, 0, 0)
-
     const now = new Date()
     if (!editingTask && finalMainDate < now) {
       alert("Cannot create a task in the past!")
@@ -343,7 +335,6 @@ const MainScreen = ({ user }) => {
         return
       }
     }
-
     let finalRecurringTime = null
     if (form.recurring && form.recurringFrequency === "Custom") {
       const newRecTime = new Date()
@@ -356,7 +347,6 @@ const MainScreen = ({ user }) => {
       newRecTime.setHours(recHour, tempSelectedMinute, 0, 0)
       finalRecurringTime = newRecTime
     }
-
     const taskData = {
       title: form.title,
       description: form.description,
@@ -369,12 +359,11 @@ const MainScreen = ({ user }) => {
       completed: false,
       archived: false,
       deleted: false,
-      color: ["#4A90E2", "#7ED321", "#D0021B", "#F5A623", "#9B59B6"][Math.floor(Math.random() * 5)],
+      color: [theme.primary, theme.success, theme.danger, theme.warning, "#9B59B6"][Math.floor(Math.random() * 5)],
       avatar: avatars.user1,
       userId: user.uid,
       completedInstances: [],
     }
-
     try {
       if (editingTask) {
         const originalTaskId = editingTask.originalTaskId || editingTask.id
@@ -399,7 +388,6 @@ const MainScreen = ({ user }) => {
   const handleEdit = (task) => {
     const originalTask = tasks.find((t) => t.id === task.originalTaskId || t.id === task.id)
     if (!originalTask) return
-
     setEditingTask(task)
     setForm({
       title: originalTask.title,
@@ -412,7 +400,6 @@ const MainScreen = ({ user }) => {
       recurringDays: originalTask.recurringDays || [],
       recurringTime: originalTask.recurringTime ? new Date(originalTask.recurringTime) : new Date(),
     })
-
     const mainDate = new Date(originalTask.date)
     let hours = mainDate.getHours()
     const minutes = mainDate.getMinutes()
@@ -442,7 +429,6 @@ const MainScreen = ({ user }) => {
         const dateStr = new Date(taskToComplete.instanceDate).toDateString()
         const originalTask = tasks.find((t) => t.id === originalTaskId)
         let currentCompletedInstances = originalTask.completedInstances || []
-
         if (isTaskCompletedForDate(taskToComplete.originalTaskId, taskToComplete.instanceDate)) {
           currentCompletedInstances = currentCompletedInstances.filter(
             (completionDateStr) => completionDateStr !== dateStr,
@@ -498,6 +484,41 @@ const MainScreen = ({ user }) => {
     }
   }
 
+  const permanentlyDeleteTask = async (taskToDelete) => {
+    if (!user) {
+      alert("You must be logged in to permanently delete tasks.")
+      return
+    }
+
+    // Show confirmation dialog
+    Alert.alert(
+      "Permanently Delete Task",
+      "This action cannot be undone. Are you sure you want to permanently delete this task?",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Delete Forever",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const originalTaskId = taskToDelete.originalTaskId || taskToDelete.id
+              const taskRef = doc(db, "tasks", originalTaskId)
+              await deleteDoc(taskRef)
+              alert("Task permanently deleted!")
+              closeModal()
+            } catch (error) {
+              console.error("Error permanently deleting task: ", error)
+              alert("Failed to permanently delete task. Please try again.")
+            }
+          },
+        },
+      ],
+    )
+  }
+
   const daysOfWeek = Array.from({ length: 7 }, (_, i) => {
     const date = new Date(selectedDate)
     date.setDate(date.getDate() - date.getDay() + i)
@@ -541,7 +562,6 @@ const MainScreen = ({ user }) => {
   }
 
   const allExpandedTasks = getExpandedTasks()
-
   const deletedTasks = allExpandedTasks
     .filter((task) => {
       const originalTask = tasks.find((t) => t.id === task.originalTaskId || t.id === task.id)
@@ -590,12 +610,12 @@ const MainScreen = ({ user }) => {
   const getPriorityColor = (priority) => {
     switch (priority) {
       case "Very Important":
-        return "#D0021B"
+        return theme.danger
       case "Important":
-        return "#F5A623"
+        return theme.warning
       case "Normal":
       default:
-        return "#7ED321"
+        return theme.success
     }
   }
 
@@ -615,10 +635,7 @@ const MainScreen = ({ user }) => {
     } else if (targetField === "recurringTime") {
       timeToParse = form.recurringTime
     }
-
     const now = new Date()
-    const isToday = timeToParse.toDateString() === now.toDateString()
-
     if (timeToParse) {
       let hours = timeToParse.getHours()
       const minutes = timeToParse.getMinutes()
@@ -658,7 +675,6 @@ const MainScreen = ({ user }) => {
       hour = 0
     }
     newTime.setHours(hour, tempSelectedMinute, 0, 0)
-
     setForm((prevForm) => {
       if (currentEditingTimeTarget === "mainDate") {
         const updatedDate = new Date(prevForm.date)
@@ -675,16 +691,19 @@ const MainScreen = ({ user }) => {
   const handleSettingsPress = () => {
     console.log("Settings pressed")
     setShowMoreModal(false)
+    navigation.navigate("Settings")
   }
 
   const handlePrivacyPolicyPress = () => {
     console.log("Privacy Policy pressed")
     setShowMoreModal(false)
+    navigation.navigate("Privacy")
   }
 
   const handleTermsAndConditionsPress = () => {
     console.log("Terms and Conditions pressed")
     setShowMoreModal(false)
+    navigation.navigate("Terms")
   }
 
   const handleCheckForUpdatesPress = () => {
@@ -714,13 +733,13 @@ const MainScreen = ({ user }) => {
           {user && fetchedUsername && <Text style={styles.usernameText}>{fetchedUsername}</Text>}
         </View>
         <TouchableOpacity onPress={() => console.log("Notifications clicked")}>
-          <Ionicons name="notifications-outline" size={24} color="#f8f8f8" />
+          <Ionicons name="notifications-outline" size={24} color={theme.text} />
         </TouchableOpacity>
       </View>
 
       {loadingTasks && refreshing ? (
         <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#0077b6" />
+          <ActivityIndicator size="large" color={theme.primary} />
           <Text style={styles.loadingText}>Loading tasks...</Text>
         </View>
       ) : (
@@ -762,7 +781,7 @@ const MainScreen = ({ user }) => {
           {/* Timeline */}
           <ScrollView
             style={styles.timelineScrollView}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#0077b6" />}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.primary} />}
           >
             <View style={styles.timelineContent}>
               {tasksForSelectedDate.length > 0 && <View style={styles.timelineLine} />}
@@ -773,7 +792,7 @@ const MainScreen = ({ user }) => {
                   </Text>
                   <View style={styles.timelineDot} />
                   <TouchableOpacity
-                    style={[styles.taskTimelineItem, { backgroundColor: task.color || "#4A90E2" }]}
+                    style={[styles.taskTimelineItem, { backgroundColor: task.color || theme.primary }]}
                     onPress={() => handleEdit(task)}
                   >
                     {task.avatar && !task.avatars && (
@@ -820,34 +839,33 @@ const MainScreen = ({ user }) => {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>{editingTask ? "Edit Task" : "Add New Task"}</Text>
               <TouchableOpacity onPress={closeModal}>
-                <Ionicons name="close" size={24} color="#555" />
+                <Ionicons name="close" size={24} color={theme.textSecondary} />
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalForm}>
               <TextInput
                 placeholder="Task title"
-                placeholderTextColor="#888"
+                placeholderTextColor={theme.textTertiary}
                 value={form.title}
                 onChangeText={(title) => setForm((prev) => ({ ...prev, title }))}
                 style={styles.input}
               />
               <TextInput
                 placeholder="Description (optional)"
-                placeholderTextColor="#888"
+                placeholderTextColor={theme.textTertiary}
                 value={form.description}
                 onChangeText={(description) => setForm((prev) => ({ ...prev, description }))}
                 style={[styles.input, styles.textArea]}
                 multiline
                 numberOfLines={3}
               />
-
               <Text style={styles.label}>Due Date</Text>
               <TouchableOpacity
                 onPress={() => setForm((prev) => ({ ...prev, showDatePicker: true }))}
                 style={[styles.datePickerTrigger]}
               >
                 <Text style={styles.datePickerTriggerText}>{form.date.toLocaleDateString()}</Text>
-                <Ionicons name="chevron-down" size={18} color="#555" />
+                <Ionicons name="chevron-down" size={18} color={theme.textSecondary} />
               </TouchableOpacity>
               <DateTimePickerModal
                 isVisible={form.showDatePicker}
@@ -856,17 +874,15 @@ const MainScreen = ({ user }) => {
                 minimumDate={new Date()}
                 onConfirm={(date) => setForm((prev) => ({ ...prev, date, showDatePicker: false }))}
                 onCancel={() => setForm((prev) => ({ ...prev, showDatePicker: false }))}
-                themeVariant="dark"
+                themeVariant={darkMode ? "dark" : "light"}
               />
-
               <Text style={styles.label}>Due Time</Text>
               <TouchableOpacity onPress={() => openCustomTimePicker("mainDate")} style={styles.timePickerTrigger}>
                 <Text style={styles.timePickerTriggerText}>
                   {form.date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 </Text>
-                <Ionicons name="chevron-down" size={18} color="#555" />
+                <Ionicons name="chevron-down" size={18} color={theme.textSecondary} />
               </TouchableOpacity>
-
               <Text style={styles.label}>Priority</Text>
               <View style={styles.pickerWrapper}>
                 {["Normal", "Important", "Very Important"].map((p) => (
@@ -881,17 +897,15 @@ const MainScreen = ({ user }) => {
                   </TouchableOpacity>
                 ))}
               </View>
-
               <View style={styles.switchContainer}>
                 <Text style={styles.switchLabel}>Recurring Task?</Text>
                 <Switch
                   value={form.recurring}
                   onValueChange={(val) => setForm((prev) => ({ ...prev, recurring: val }))}
-                  trackColor={{ false: "#e0e0e0", true: "#0077b6" }}
+                  trackColor={{ false: theme.border, true: theme.primary }}
                   thumbColor={form.recurring ? "#fff" : "#f4f3f4"}
                 />
               </View>
-
               {form.recurring && (
                 <>
                   <Text style={styles.label}>Frequency</Text>
@@ -913,7 +927,6 @@ const MainScreen = ({ user }) => {
                       </TouchableOpacity>
                     ))}
                   </View>
-
                   {form.recurringFrequency === "Custom" && (
                     <>
                       <Text style={styles.label}>Select Days</Text>
@@ -946,13 +959,12 @@ const MainScreen = ({ user }) => {
                             minute: "2-digit",
                           })}
                         </Text>
-                        <Ionicons name="chevron-down" size={18} color="#555" />
+                        <Ionicons name="chevron-down" size={18} color={theme.textSecondary} />
                       </TouchableOpacity>
                     </>
                   )}
                 </>
               )}
-
               {editingTask && (
                 <View style={styles.taskActionsContainer}>
                   <TouchableOpacity
@@ -1006,6 +1018,16 @@ const MainScreen = ({ user }) => {
                         : "Delete"}
                     </Text>
                   </TouchableOpacity>
+                  {editingTask &&
+                    tasks.find((t) => t.id === editingTask.originalTaskId || t.id === editingTask.id)?.deleted && (
+                      <TouchableOpacity
+                        style={[styles.taskActionButton, styles.permanentDeleteButton]}
+                        onPress={() => permanentlyDeleteTask(editingTask)}
+                      >
+                        <Ionicons name="trash-bin" size={20} color="#fff" />
+                        <Text style={styles.taskActionButtonText}>Delete Forever</Text>
+                      </TouchableOpacity>
+                    )}
                 </View>
               )}
             </ScrollView>
@@ -1023,7 +1045,7 @@ const MainScreen = ({ user }) => {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Select Time</Text>
               <TouchableOpacity onPress={() => setShowCustomTimePickerModal(false)}>
-                <Ionicons name="close" size={24} color="#555" />
+                <Ionicons name="close" size={24} color={theme.textSecondary} />
               </TouchableOpacity>
             </View>
             <View style={styles.timePickerColumns}>
@@ -1034,11 +1056,9 @@ const MainScreen = ({ user }) => {
                   const currentHour24 = now.getHours()
                   let displayHour24 = tempSelectedAmPm === "PM" && hour !== 12 ? hour + 12 : hour
                   if (tempSelectedAmPm === "AM" && hour === 12) displayHour24 = 0
-
                   if (currentEditingTimeTarget === "mainDate" && isToday && displayHour24 < currentHour24) {
                     return null
                   }
-
                   return (
                     <TouchableOpacity
                       key={hour}
@@ -1067,7 +1087,6 @@ const MainScreen = ({ user }) => {
                   let selectedHour24 =
                     tempSelectedAmPm === "PM" && tempSelectedHour !== 12 ? tempSelectedHour + 12 : tempSelectedHour
                   if (tempSelectedAmPm === "AM" && tempSelectedHour === 12) selectedHour24 = 0
-
                   if (
                     currentEditingTimeTarget === "mainDate" &&
                     isToday &&
@@ -1076,7 +1095,6 @@ const MainScreen = ({ user }) => {
                   ) {
                     return null
                   }
-
                   return (
                     <TouchableOpacity
                       key={minute}
@@ -1137,7 +1155,7 @@ const MainScreen = ({ user }) => {
                   setCurrentMonthView(newMonth)
                 }}
               >
-                <Ionicons name="chevron-back" size={24} color="#f8f8f8" />
+                <Ionicons name="chevron-back" size={24} color={theme.text} />
               </TouchableOpacity>
               <Text style={styles.monthCalendarTitle}>
                 {currentMonthView.toLocaleDateString("en-ZA", { month: "long", year: "numeric" })}
@@ -1149,10 +1167,10 @@ const MainScreen = ({ user }) => {
                   setCurrentMonthView(newMonth)
                 }}
               >
-                <Ionicons name="chevron-forward" size={24} color="#f8f8f8" />
+                <Ionicons name="chevron-forward" size={24} color={theme.text} />
               </TouchableOpacity>
               <TouchableOpacity onPress={() => setShowMonthCalendar(false)}>
-                <Ionicons name="close" size={24} color="#555" />
+                <Ionicons name="close" size={24} color={theme.textSecondary} />
               </TouchableOpacity>
             </View>
             <View style={styles.weekDaysHeader}>
@@ -1170,11 +1188,9 @@ const MainScreen = ({ user }) => {
                 startDate.setDate(startDate.getDate() - firstDayOfMonth.getDay())
                 const currentDate = new Date(startDate)
                 currentDate.setDate(startDate.getDate() + i)
-
                 const isCurrentMonth = currentDate.getMonth() === currentMonthView.getMonth()
                 const isToday = currentDate.toDateString() === today.toDateString()
                 const isSelected = currentDate.toDateString() === selectedDate.toDateString()
-
                 return (
                   <TouchableOpacity
                     key={i}
@@ -1206,14 +1222,14 @@ const MainScreen = ({ user }) => {
         </View>
       </Modal>
 
-      {/* Task Tabs Modal (Deleted, Archive, Complete, Upcoming) */}
+      {/* Task Tabs Modal */}
       <Modal visible={showTaskTabsModal} transparent animationType="fade">
         <View style={styles.modalContainer}>
           <View style={styles.taskTabsModalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>My Tasks</Text>
               <TouchableOpacity onPress={() => setShowTaskTabsModal(false)}>
-                <Ionicons name="close" size={24} color="#555" />
+                <Ionicons name="close" size={24} color={theme.textSecondary} />
               </TouchableOpacity>
             </View>
             <View style={styles.taskTabsContainer}>
@@ -1234,7 +1250,7 @@ const MainScreen = ({ user }) => {
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <TouchableOpacity
-                  style={[styles.taskListItem, { backgroundColor: item.color || "#4A90E2" }]}
+                  style={[styles.taskListItem, { backgroundColor: item.color || theme.primary }]}
                   onPress={() => handleEdit(item)}
                 >
                   <View style={styles.taskListItemContent}>
@@ -1271,12 +1287,12 @@ const MainScreen = ({ user }) => {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>More Options</Text>
               <TouchableOpacity onPress={() => setShowMoreModal(false)}>
-                <Ionicons name="close" size={24} color="#555" />
+                <Ionicons name="close" size={24} color={theme.textSecondary} />
               </TouchableOpacity>
             </View>
             <ScrollView>
               <TouchableOpacity style={styles.moreOptionButton} onPress={handleSettingsPress}>
-                <Ionicons name="settings-outline" size={22} color="#f8f8f8" />
+                <Ionicons name="settings-outline" size={22} color={theme.text} />
                 <Text style={styles.moreOptionButtonText}>Settings</Text>
               </TouchableOpacity>
               <View style={styles.moreOptionGroup}>
@@ -1289,11 +1305,11 @@ const MainScreen = ({ user }) => {
                 </TouchableOpacity>
               </View>
               <TouchableOpacity style={styles.moreOptionButton} onPress={handleCheckForUpdatesPress}>
-                <Ionicons name="cloud-download-outline" size={22} color="#f8f8f8" />
+                <Ionicons name="cloud-download-outline" size={22} color={theme.text} />
                 <Text style={styles.moreOptionButtonText}>Check for Updates</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.moreOptionButton, styles.logoutButton]} onPress={handleLogoutPress}>
-                <Ionicons name="log-out-outline" size={22} color="#D0021B" />
+                <Ionicons name="log-out-outline" size={22} color= 'white' />
                 <Text style={[styles.moreOptionButtonText, styles.logoutButtonText]}>Logout</Text>
               </TouchableOpacity>
             </ScrollView>
@@ -1317,8 +1333,10 @@ const MainScreen = ({ user }) => {
             }
             style={styles.navItem}
           >
-            <Ionicons name={getIcon(tab)} size={24} color={activeTab === tab ? "#0077b6" : "#888"} />
-            <Text style={[styles.navText, { color: activeTab === tab ? "#0077b6" : "#888" }]}>{tab}</Text>
+            <Ionicons name={getIcon(tab)} size={24} color={activeTab === tab ? theme.primary : theme.textTertiary} />
+            <Text style={[styles.navText, { color: activeTab === tab ? theme.primary : theme.textTertiary }]}>
+              {tab}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -1326,740 +1344,772 @@ const MainScreen = ({ user }) => {
   )
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#202327",
-    justifyContent: "flex-start",
-    alignItems: "center",
-    paddingTop: Platform.OS === "android" ? 30 : 50,
-  },
-  topHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    width: "95%",
-    marginBottom: 20,
-    marginTop: 10,
-    paddingHorizontal: 5,
-  },
-  greetingText: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#f8f8f8",
-  },
-  usernameText: {
-    fontSize: 16,
-    fontWeight: "500",
-    color: "#ccc",
-    marginTop: 2,
-  },
-  mainCard: {
-    flex: 1,
-    width: "100%",
-    backgroundColor: "#2C2F33",
-    borderRadius: 25,
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-    elevation: 15,
-    marginBottom: 80,
-  },
-  dateSummaryContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 25,
-  },
-  dateText: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#f8f8f8",
-    marginBottom: 5,
-  },
-  taskCountText: {
-    fontSize: 14,
-    color: "#ccc",
-  },
-  calendarButtonLarge: {
-    width: 40,
-    height: 40,
-    borderRadius: 25,
-    backgroundColor: "#7ED321",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  calendarContainer: {
-    marginBottom: 20,
-  },
-  calendarScroll: {
-    paddingVertical: 5,
-  },
-  dayBlock: {
-    paddingVertical: 5,
-    paddingHorizontal: 12,
-    marginRight: 8,
-    backgroundColor: "#3A3D42",
-    borderRadius: 10,
-    height: 45,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  selectedDayBlock: {
-    backgroundColor: "#D0021B",
-  },
-  dayLabel: { fontSize: 12, fontWeight: "500", textAlign: "center", color: "#ccc" },
-  dayNumber: { fontSize: 14, fontWeight: "700", textAlign: "center", color: "#f8f8f8", marginTop: 0 },
-  selectedDayLabel: {
-    color: "#fff",
-  },
-  selectedDayNumber: {
-    color: "#fff",
-  },
-  selectedDayDot: {
-    width: 3,
-    height: 3,
-    borderRadius: 1.5,
-    backgroundColor: "#fff",
-    marginTop: 2,
-  },
-  timelineScrollView: {
-    flex: 1,
-    paddingHorizontal: 2,
-  },
-  timelineContent: {
-    position: "relative",
-    paddingLeft: 65,
-  },
-  timelineLine: {
-    position: "absolute",
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 2,
-    backgroundColor: "#555",
-  },
-  timelineRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  timeSlotText: {
-    position: "absolute",
-    left: -70,
-    width: 65,
-    textAlign: "right",
-    fontSize: 13,
-    color: "#ccc",
-    top: 0,
-  },
-  timelineDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: "#F5A623",
-    position: "absolute",
-    left: 21,
-    top: 0,
-  },
-  taskTimelineItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    borderRadius: 25,
-    marginBottom: 0,
-    minHeight: 50,
-    flex: 1,
-  },
-  taskTimelineAvatar: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    marginRight: 10,
-    backgroundColor: "#eee",
-  },
-  taskTimelineAvatarsGroup: {
-    flexDirection: "row",
-    marginRight: 10,
-  },
-  taskTimelineAvatarSmall: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    marginLeft: -8,
-    borderWidth: 1,
-    borderColor: "#fff",
-    backgroundColor: "#eee",
-  },
-  taskInfoContainer: {
-    flex: 1,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  taskTimelineTitle: {
-    fontSize: 16,
-    fontWeight: "500",
-    color: "#fff",
-    flexShrink: 1,
-  },
-  priorityBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 10,
-    marginLeft: 10,
-  },
-  priorityBadgeText: {
-    fontSize: 12,
-    fontWeight: "bold",
-    color: "#fff",
-  },
-  noTasksText: {
-    fontSize: 16,
-    color: "#ccc",
-    textAlign: "center",
-    marginTop: 50,
-  },
-  fab: {
-    position: "absolute",
-    bottom: 30,
-    right: 30,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "#0077b6",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  modalContainer: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  modalContent: {
-    width: "90%",
-    backgroundColor: "#2C2F33",
-    borderRadius: 15,
-    padding: 20,
-    maxHeight: "85%",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 10,
-  },
-  modalHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 20,
-    paddingBottom: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: "#444",
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#f8f8f8",
-  },
-  modalForm: {
-    flexGrow: 1,
-    paddingBottom: 10,
-  },
-  input: {
-    backgroundColor: "#3A3D42",
-    padding: 15,
-    marginBottom: 15,
-    borderRadius: 10,
-    fontSize: 16,
-    color: "#f8f8f8",
-    borderWidth: 1,
-    borderColor: "#444",
-  },
-  textArea: {
-    height: 100,
-    textAlignVertical: "top",
-  },
-  label: {
-    fontWeight: "600",
-    marginBottom: 10,
-    fontSize: 16,
-    color: "#f8f8f8",
-  },
-  datePickerTrigger: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: "#3A3D42",
-    padding: 15,
-    marginBottom: 15,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#444",
-  },
-  datePickerTriggerText: {
-    fontSize: 16,
-    color: "#f8f8f8",
-  },
-  timePickerTrigger: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: "#3A3D42",
-    padding: 15,
-    marginBottom: 15,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#444",
-  },
-  timePickerTriggerText: {
-    fontSize: 16,
-    color: "#f8f8f8",
-  },
-  pickerWrapper: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    marginBottom: 15,
-  },
-  priorityButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    backgroundColor: "#3A3D42",
-    borderRadius: 10,
-    minWidth: 90,
-    alignItems: "center",
-  },
-  prioritySelected: { backgroundColor: "#0077b6" },
-  priorityButtonText: {
-    fontSize: 14,
-    color: "#ccc",
-    fontWeight: "500",
-  },
-  priorityButtonTextSelected: {
-    color: "#fff",
-    fontWeight: "bold",
-  },
-  switchContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 15,
-    paddingVertical: 5,
-  },
-  switchLabel: {
-    fontSize: 16,
-    fontWeight: "500",
-    color: "#f8f8f8",
-  },
-  saveButton: {
-    backgroundColor: "#0077b6",
-    padding: 18,
-    borderRadius: 12,
-    marginTop: 10,
-    alignSelf: "stretch",
-  },
-  saveButtonText: {
-    color: "#fff",
-    textAlign: "center",
-    fontSize: 18,
-    fontWeight: "bold",
-  },
-  daysSelector: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginBottom: 15,
-  },
-  dayButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    backgroundColor: "#3A3D42",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#444",
-  },
-  dayButtonSelected: {
-    backgroundColor: "#0077b6",
-    borderColor: "#0077b6",
-  },
-  dayButtonText: {
-    fontSize: 12,
-    color: "#ccc",
-    fontWeight: "500",
-  },
-  dayButtonTextSelected: {
-    color: "#fff",
-    fontWeight: "bold",
-  },
-  monthCalendarContent: {
-    margin: 20,
-    padding: 20,
-    backgroundColor: "#2C2F33",
-    borderRadius: 10,
-    maxHeight: "80%",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 10,
-  },
-  monthCalendarHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 20,
-    paddingBottom: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: "#444",
-  },
-  monthCalendarTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#f8f8f8",
-  },
-  weekDaysHeader: {
-    flexDirection: "row",
-    marginBottom: 10,
-  },
-  weekDayText: {
-    flex: 1,
-    textAlign: "center",
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#ccc",
-    paddingVertical: 8,
-  },
-  calendarGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-  },
-  calendarDay: {
-    width: "14.28%",
-    aspectRatio: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    borderRadius: 8,
-    margin: 1,
-  },
-  todayCalendarDay: {
-    backgroundColor: "#0077b6",
-  },
-  selectedCalendarDay: {
-    backgroundColor: "#D0021B",
-  },
-  calendarDayText: {
-    fontSize: 11,
-    color: "#f8f8f8",
-  },
-  todayCalendarText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 10,
-  },
-  selectedCalendarText: {
-    color: "#fff",
-    fontWeight: "bold",
-  },
-  otherMonthText: {
-    color: "#666",
-  },
-  bottomNav: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-    height: 70,
-    backgroundColor: "#202327",
-    position: "absolute",
-    bottom: 5,
-    left: 0,
-    right: 0,
-    borderRadius: 25,
-    marginHorizontal: 10,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 5,
-    paddingBottom: Platform.OS === "ios" ? 10 : 0,
-  },
-  navItem: {
-    alignItems: "center",
-    padding: 5,
-  },
-  navText: {
-    fontSize: 12,
-    marginTop: 4,
-    fontWeight: "500",
-  },
-  taskActionsContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: 8,
-    marginTop: 20,
-    paddingTop: 15,
-    borderTopWidth: 1,
-    borderTopColor: "#444",
-  },
-  taskActionButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: "#555",
-  },
-  taskActionButtonText: {
-    color: "#fff",
-    marginLeft: 6,
-    fontWeight: "bold",
-    fontSize: 12,
-  },
-  completeButton: {
-    backgroundColor: "#7ED321",
-  },
-  archiveButton: {
-    backgroundColor: "#F5A623",
-  },
-  deleteButton: {
-    backgroundColor: "#D0021B",
-  },
-  taskTabsModalContent: {
-    width: "95%",
-    backgroundColor: "#2C2F33",
-    borderRadius: 15,
-    padding: 20,
-    maxHeight: "90%",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 10,
-  },
-  taskTabsContainer: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: "#444",
-    paddingBottom: 10,
-  },
-  taskTabButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    borderRadius: 10,
-  },
-  taskTabButtonSelected: {
-    backgroundColor: "#0077b6",
-  },
-  taskTabButtonText: {
-    color: "#ccc",
-    fontWeight: "600",
-  },
-  taskTabButtonTextSelected: {
-    color: "#fff",
-  },
-  taskListContainer: {
-    paddingBottom: 20,
-  },
-  taskListItem: {
-    padding: 15,
-    borderRadius: 15,
-    marginBottom: 10,
-    position: "relative",
-  },
-  taskListItemContent: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 5,
-  },
-  taskListItemTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#fff",
-    flexShrink: 1,
-    marginRight: 10,
-  },
-  taskListItemDate: {
-    fontSize: 12,
-    color: "#eee",
-  },
-  completedText: {
-    textDecorationLine: "line-through",
-    opacity: 0.7,
-  },
-  completedTick: {
-    marginLeft: 8,
-  },
-  taskTimelineTitleContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexShrink: 1,
-  },
-  taskListItemTitleContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexShrink: 1,
-    marginRight: 10,
-  },
-  customTimePickerContent: {
-    width: "90%",
-    backgroundColor: "#2C2F33",
-    borderRadius: 15,
-    height: "80%",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 10,
-    flexDirection: "column",
-  },
-  timePickerColumns: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 20,
-    flex: 1,
-  },
-  timePickerColumn: {
-    flex: 1,
-    marginHorizontal: 5,
-    borderWidth: 1,
-    borderColor: "#444",
-    borderRadius: 10,
-  },
-  timePickerAmPmColumn: {
-    justifyContent: "space-around",
-    marginHorizontal: 5,
-    borderWidth: 1,
-    borderColor: "#444",
-    borderRadius: 10,
-    flex: 1,
-  },
-  timePickerItem: {
-    paddingVertical: 15,
-    alignItems: "center",
-  },
-  timePickerItemSelected: {
-    backgroundColor: "#0077b6",
-    borderRadius: 8,
-    marginHorizontal: 5,
-  },
-  timePickerItemText: {
-    fontSize: 20,
-    color: "#f8f8f8",
-  },
-  timePickerItemTextSelected: {
-    fontWeight: "bold",
-    color: "#fff",
-  },
-  timePickerSeparator: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#f8f8f8",
-    marginHorizontal: 5,
-  },
-  timePickerSaveButton: {
-    backgroundColor: "#0077b6",
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    borderRadius: 12,
-    marginTop: 10,
-    alignSelf: "stretch",
-  },
-  timePickerSaveButtonText: {
-    color: "#fff",
-    textAlign: "center",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-  moreModalContent: {
-    width: "90%",
-    backgroundColor: "#2C2F33",
-    borderRadius: 15,
-    padding: 20,
-    maxHeight: "85%",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 10,
-  },
-  moreOptionButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 15,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    marginBottom: 10,
-    backgroundColor: "#3A3D42",
-  },
-  moreOptionButtonText: {
-    fontSize: 16,
-    color: "#f8f8f8",
-    marginLeft: 15,
-    fontWeight: "500",
-  },
-  moreOptionGroup: {
-    marginBottom: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    backgroundColor: "#3A3D42",
-    borderRadius: 10,
-  },
-  moreOptionGroupTitle: {
-    fontSize: 14,
-    fontWeight: "bold",
-    color: "#ccc",
-    marginBottom: 10,
-    marginLeft: 5,
-  },
-  moreOptionSubButton: {
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    borderRadius: 8,
-    marginBottom: 5,
-    backgroundColor: "#44474B",
-  },
-  moreOptionSubButtonText: {
-    fontSize: 15,
-    color: "#f8f8f8",
-    marginLeft: 10,
-  },
-  logoutButton: {
-    backgroundColor: "#D0021B",
-    marginTop: 20,
-    justifyContent: "center",
-  },
-  logoutButtonText: {
-    color: "#fff",
-    fontWeight: "bold",
-  },
-  loadingOverlay: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#202327",
-  },
-  loadingText: {
-    marginTop: 10,
-    color: "#f8f8f8",
-    fontSize: 16,
-  },
-})
+// Dynamic styles function
+const createStyles = (theme) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: theme.background,
+      justifyContent: "flex-start",
+      alignItems: "center",
+      paddingTop: Platform.OS === "android" ? 30 : 50,
+    },
+    topHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      width: "95%",
+      marginBottom: 20,
+      marginTop: 10,
+      paddingHorizontal: 5,
+    },
+    greetingText: {
+      fontSize: 20,
+      fontWeight: "700",
+      color: theme.text,
+    },
+    usernameText: {
+      fontSize: 16,
+      fontWeight: "500",
+      color: theme.textSecondary,
+      marginTop: 2,
+    },
+    mainCard: {
+      flex: 1,
+      width: "100%",
+      backgroundColor: theme.surface,
+      borderRadius: 25,
+      paddingHorizontal: 20,
+      paddingTop: 20,
+      paddingBottom: 20,
+      shadowColor: theme.shadow,
+      shadowOffset: { width: 0, height: 10 },
+      shadowOpacity: 0.5,
+      shadowRadius: 20,
+      elevation: 15,
+      marginBottom: 80,
+    },
+    dateSummaryContainer: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 25,
+    },
+    dateText: {
+      fontSize: 20,
+      fontWeight: "700",
+      color: theme.text,
+      marginBottom: 5,
+    },
+    taskCountText: {
+      fontSize: 14,
+      color: theme.textSecondary,
+    },
+    calendarButtonLarge: {
+      width: 40,
+      height: 40,
+      borderRadius: 25,
+      backgroundColor: theme.success,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    calendarContainer: {
+      marginBottom: 20,
+    },
+    calendarScroll: {
+      paddingVertical: 5,
+    },
+    dayBlock: {
+      paddingVertical: 5,
+      paddingHorizontal: 12,
+      marginRight: 8,
+      backgroundColor: theme.card,
+      borderRadius: 10,
+      height: 45,
+      justifyContent: "center",
+      alignItems: "center",
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    selectedDayBlock: {
+      backgroundColor: theme.primary,
+      borderColor: theme.primary,
+    },
+    dayLabel: {
+      fontSize: 12,
+      fontWeight: "500",
+      textAlign: "center",
+      color: theme.textSecondary,
+    },
+    dayNumber: {
+      fontSize: 14,
+      fontWeight: "700",
+      textAlign: "center",
+      color: theme.text,
+      marginTop: 0,
+    },
+    selectedDayLabel: {
+      color: "#fff",
+    },
+    selectedDayNumber: {
+      color: "#fff",
+    },
+    selectedDayDot: {
+      width: 3,
+      height: 3,
+      borderRadius: 1.5,
+      backgroundColor: "#fff",
+      marginTop: 2,
+    },
+    timelineScrollView: {
+      flex: 1,
+      paddingHorizontal: 2,
+    },
+    timelineContent: {
+      position: "relative",
+      paddingLeft: 65,
+    },
+    timelineLine: {
+      position: "absolute",
+      left: 0,
+      top: 0,
+      bottom: 0,
+      width: 2,
+      backgroundColor: theme.border,
+    },
+    timelineRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: 20,
+    },
+    timeSlotText: {
+      position: "absolute",
+      left: -70,
+      width: 65,
+      textAlign: "right",
+      fontSize: 13,
+      color: theme.textSecondary,
+      top: 0,
+    },
+    timelineDot: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: theme.warning,
+      position: "absolute",
+      left: 21,
+      top: 0,
+    },
+    taskTimelineItem: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: 10,
+      paddingHorizontal: 15,
+      borderRadius: 25,
+      marginBottom: 0,
+      minHeight: 50,
+      flex: 1,
+    },
+    taskTimelineAvatar: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      marginRight: 10,
+      backgroundColor: theme.border,
+    },
+    taskTimelineAvatarsGroup: {
+      flexDirection: "row",
+      marginRight: 10,
+    },
+    taskTimelineAvatarSmall: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      marginLeft: -8,
+      borderWidth: 1,
+      borderColor: "#fff",
+      backgroundColor: theme.border,
+    },
+    taskInfoContainer: {
+      flex: 1,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+    },
+    taskTimelineTitle: {
+      fontSize: 16,
+      fontWeight: "500",
+      color: "#fff",
+      flexShrink: 1,
+    },
+    priorityBadge: {
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 10,
+      marginLeft: 10,
+    },
+    priorityBadgeText: {
+      fontSize: 12,
+      fontWeight: "bold",
+      color: "#fff",
+    },
+    noTasksText: {
+      fontSize: 16,
+      color: theme.textSecondary,
+      textAlign: "center",
+      marginTop: 50,
+      alignSelf: "center",
+      width: "100%",
+      paddingHorizontal: 30,
+    },
+    fab: {
+      position: "absolute",
+      bottom: 30,
+      right: 30,
+      width: 60,
+      height: 60,
+      borderRadius: 30,
+      backgroundColor: theme.primary,
+      justifyContent: "center",
+      alignItems: "center",
+      shadowColor: theme.shadow,
+      shadowOffset: { width: 0, height: 5 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 8,
+    },
+    modalContainer: {
+      flex: 1,
+      backgroundColor: "rgba(0, 0, 0, 0.7)",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    modalContent: {
+      width: "90%",
+      backgroundColor: theme.surface,
+      borderRadius: 15,
+      padding: 20,
+      maxHeight: "85%",
+      shadowColor: theme.shadow,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 8,
+      elevation: 10,
+    },
+    modalHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 20,
+      paddingBottom: 15,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
+    modalTitle: {
+      fontSize: 20,
+      fontWeight: "bold",
+      color: theme.text,
+    },
+    modalForm: {
+      flexGrow: 1,
+      paddingBottom: 10,
+    },
+    input: {
+      backgroundColor: theme.card,
+      padding: 15,
+      marginBottom: 15,
+      borderRadius: 10,
+      fontSize: 16,
+      color: theme.text,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    textArea: {
+      height: 100,
+      textAlignVertical: "top",
+    },
+    label: {
+      fontWeight: "600",
+      marginBottom: 10,
+      fontSize: 16,
+      color: theme.text,
+    },
+    datePickerTrigger: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      backgroundColor: theme.card,
+      padding: 15,
+      marginBottom: 15,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    datePickerTriggerText: {
+      fontSize: 16,
+      color: theme.text,
+    },
+    timePickerTrigger: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      backgroundColor: theme.card,
+      padding: 15,
+      marginBottom: 15,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    timePickerTriggerText: {
+      fontSize: 16,
+      color: theme.text,
+    },
+    pickerWrapper: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 10,
+      marginBottom: 15,
+    },
+    priorityButton: {
+      paddingVertical: 10,
+      paddingHorizontal: 15,
+      backgroundColor: theme.card,
+      borderRadius: 10,
+      minWidth: 90,
+      alignItems: "center",
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    prioritySelected: {
+      backgroundColor: theme.primary,
+      borderColor: theme.primary,
+    },
+    priorityButtonText: {
+      fontSize: 14,
+      color: theme.textSecondary,
+      fontWeight: "500",
+    },
+    priorityButtonTextSelected: {
+      color: "#fff",
+      fontWeight: "bold",
+    },
+    switchContainer: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 15,
+      paddingVertical: 5,
+    },
+    switchLabel: {
+      fontSize: 16,
+      fontWeight: "500",
+      color: theme.text,
+    },
+    saveButton: {
+      backgroundColor: theme.primary,
+      padding: 18,
+      borderRadius: 12,
+      marginTop: 10,
+      alignSelf: "stretch",
+    },
+    saveButtonText: {
+      color: "#fff",
+      textAlign: "center",
+      fontSize: 18,
+      fontWeight: "bold",
+    },
+    daysSelector: {
+      flexDirection: "row",
+      justifyContent: "space-around",
+      marginBottom: 15,
+    },
+    dayButton: {
+      width: 30,
+      height: 30,
+      borderRadius: 10,
+      backgroundColor: theme.card,
+      justifyContent: "center",
+      alignItems: "center",
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    dayButtonSelected: {
+      backgroundColor: theme.primary,
+      borderColor: theme.primary,
+    },
+    dayButtonText: {
+      fontSize: 12,
+      color: theme.textSecondary,
+      fontWeight: "500",
+    },
+    dayButtonTextSelected: {
+      color: "#fff",
+      fontWeight: "bold",
+    },
+    monthCalendarContent: {
+      margin: 20,
+      padding: 20,
+      backgroundColor: theme.surface,
+      borderRadius: 10,
+      maxHeight: "80%",
+      shadowColor: theme.shadow,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 8,
+      elevation: 10,
+    },
+    monthCalendarHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 20,
+      paddingBottom: 15,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
+    monthCalendarTitle: {
+      fontSize: 20,
+      fontWeight: "bold",
+      color: theme.text,
+    },
+    weekDaysHeader: {
+      flexDirection: "row",
+      marginBottom: 10,
+    },
+    weekDayText: {
+      flex: 1,
+      textAlign: "center",
+      fontSize: 11,
+      fontWeight: "600",
+      color: theme.textSecondary,
+      paddingVertical: 8,
+    },
+    calendarGrid: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+    },
+    calendarDay: {
+      width: "14.28%",
+      aspectRatio: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      borderRadius: 8,
+      margin: 1,
+    },
+    todayCalendarDay: {
+      backgroundColor: theme.primary,
+    },
+    selectedCalendarDay: {
+      backgroundColor: theme.danger,
+    },
+    calendarDayText: {
+      fontSize: 11,
+      color: theme.text,
+    },
+    todayCalendarText: {
+      color: "#fff",
+      fontWeight: "bold",
+      fontSize: 10,
+    },
+    selectedCalendarText: {
+      color: "#fff",
+      fontWeight: "bold",
+    },
+    otherMonthText: {
+      color: theme.textTertiary,
+    },
+    bottomNav: {
+      flexDirection: "row",
+      justifyContent: "space-around",
+      alignItems: "center",
+      height: 70,
+      backgroundColor: theme.surface,
+      position: "absolute",
+      bottom: 5,
+      left: 0,
+      right: 0,
+      borderRadius: 25,
+      marginHorizontal: 10,
+      shadowColor: theme.shadow,
+      shadowOffset: { width: 0, height: -2 },
+      shadowOpacity: 0.05,
+      shadowRadius: 4,
+      elevation: 5,
+      paddingBottom: Platform.OS === "ios" ? 10 : 0,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    navItem: {
+      alignItems: "center",
+      padding: 5,
+    },
+    navText: {
+      fontSize: 12,
+      marginTop: 4,
+      fontWeight: "500",
+    },
+    taskActionsContainer: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      flexWrap: "wrap",
+      gap: 8,
+      marginTop: 20,
+      paddingTop: 15,
+      borderTopWidth: 1,
+      borderTopColor: theme.border,
+    },
+    taskActionButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 8,
+      backgroundColor: theme.textTertiary,
+    },
+    taskActionButtonText: {
+      color: "#fff",
+      marginLeft: 6,
+      fontWeight: "bold",
+      fontSize: 12,
+    },
+    completeButton: {
+      backgroundColor: theme.success,
+    },
+    archiveButton: {
+      backgroundColor: theme.warning,
+    },
+    deleteButton: {
+      backgroundColor: theme.danger,
+    },
+    taskTabsModalContent: {
+      width: "95%",
+      backgroundColor: theme.surface,
+      borderRadius: 15,
+      padding: 20,
+      maxHeight: "90%",
+      shadowColor: theme.shadow,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 8,
+      elevation: 10,
+    },
+    taskTabsContainer: {
+      flexDirection: "row",
+      justifyContent: "space-around",
+      marginBottom: 20,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+      paddingBottom: 10,
+    },
+    taskTabButton: {
+      paddingVertical: 10,
+      paddingHorizontal: 15,
+      borderRadius: 10,
+    },
+    taskTabButtonSelected: {
+      backgroundColor: theme.primary,
+    },
+    taskTabButtonText: {
+      color: theme.textSecondary,
+      fontWeight: "600",
+    },
+    taskTabButtonTextSelected: {
+      color: "#fff",
+    },
+    taskListContainer: {
+      paddingBottom: 20,
+    },
+    taskListItem: {
+      padding: 15,
+      borderRadius: 15,
+      marginBottom: 10,
+      position: "relative",
+    },
+    taskListItemContent: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 5,
+    },
+    taskListItemTitle: {
+      fontSize: 18,
+      fontWeight: "bold",
+      color: "#fff",
+      flexShrink: 1,
+      marginRight: 10,
+    },
+    taskListItemDate: {
+      fontSize: 12,
+      color: "#eee",
+    },
+    completedText: {
+      textDecorationLine: "line-through",
+      opacity: 0.7,
+    },
+    completedTick: {
+      marginLeft: 8,
+    },
+    taskTimelineTitleContainer: {
+      flexDirection: "row",
+      alignItems: "center",
+      flexShrink: 1,
+    },
+    taskListItemTitleContainer: {
+      flexDirection: "row",
+      alignItems: "center",
+      flexShrink: 1,
+      marginRight: 10,
+    },
+    customTimePickerContent: {
+      width: "90%",
+      backgroundColor: theme.surface,
+      borderRadius: 15,
+      height: "80%",
+      shadowColor: theme.shadow,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 8,
+      elevation: 10,
+      flexDirection: "column",
+    },
+    timePickerColumns: {
+      flexDirection: "row",
+      justifyContent: "center",
+      alignItems: "center",
+      marginBottom: 20,
+      flex: 1,
+    },
+    timePickerColumn: {
+      flex: 1,
+      marginHorizontal: 5,
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 10,
+    },
+    timePickerAmPmColumn: {
+      justifyContent: "space-around",
+      marginHorizontal: 5,
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 10,
+      flex: 1,
+    },
+    timePickerItem: {
+      paddingVertical: 15,
+      alignItems: "center",
+    },
+    timePickerItemSelected: {
+      backgroundColor: theme.primary,
+      borderRadius: 8,
+      marginHorizontal: 5,
+    },
+    timePickerItemText: {
+      fontSize: 20,
+      color: theme.text,
+    },
+    timePickerItemTextSelected: {
+      fontWeight: "bold",
+      color: "#fff",
+    },
+    timePickerSeparator: {
+      fontSize: 24,
+      fontWeight: "bold",
+      color: theme.text,
+      marginHorizontal: 5,
+    },
+    timePickerSaveButton: {
+      backgroundColor: theme.primary,
+      paddingVertical: 12,
+      paddingHorizontal: 15,
+      borderRadius: 12,
+      marginTop: 10,
+      alignSelf: "stretch",
+    },
+    timePickerSaveButtonText: {
+      color: "#fff",
+      textAlign: "center",
+      fontSize: 16,
+      fontWeight: "bold",
+    },
+    moreModalContent: {
+      width: "90%",
+      backgroundColor: theme.surface,
+      borderRadius: 15,
+      padding: 20,
+      maxHeight: "85%",
+      shadowColor: theme.shadow,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 8,
+      elevation: 10,
+    },
+    moreOptionButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: 15,
+      paddingHorizontal: 10,
+      borderRadius: 10,
+      marginBottom: 10,
+      backgroundColor: theme.card,
+    },
+    moreOptionButtonText: {
+      fontSize: 16,
+      color: theme.text,
+      marginLeft: 15,
+      fontWeight: "500",
+    },
+    moreOptionGroup: {
+      marginBottom: 10,
+      paddingVertical: 10,
+      paddingHorizontal: 10,
+      backgroundColor: theme.card,
+      borderRadius: 10,
+    },
+    moreOptionGroupTitle: {
+      fontSize: 14,
+      fontWeight: "bold",
+      color: theme.textSecondary,
+      marginBottom: 10,
+      marginLeft: 5,
+    },
+    moreOptionSubButton: {
+      paddingVertical: 12,
+      paddingHorizontal: 15,
+      borderRadius: 8,
+      marginBottom: 5,
+      backgroundColor: theme.background,
+    },
+    moreOptionSubButtonText: {
+      fontSize: 15,
+      color: theme.text,
+      marginLeft: 10,
+    },
+    logoutButton: {
+      backgroundColor: theme.danger,
+      marginTop: 20,
+      justifyContent: "center",
+    },
+    logoutButtonText: {
+      color: "#fff",
+      fontWeight: "bold",
+    },
+    loadingOverlay: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      backgroundColor: theme.background,
+    },
+    loadingText: {
+      marginTop: 10,
+      color: theme.text,
+      fontSize: 16,
+    },
+    permanentDeleteButton: {
+      backgroundColor: "#e98282ff", // Dark red for permanent delete
+      width: "100%",
+      marginTop: 10,
+      justifyContent: "center",
+    },
+  })
 
 export default MainScreen

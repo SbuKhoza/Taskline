@@ -1,3 +1,5 @@
+"use client"
+
 import { useState, useEffect } from "react"
 import { View, Text, StyleSheet, TouchableOpacity, Image, ScrollView, Platform, TextInput } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
@@ -6,28 +8,27 @@ import { auth, db } from "../firebase/config"
 import { onAuthStateChanged, updatePassword } from "firebase/auth"
 import { collection, doc, getDoc, setDoc, query, where, getDocs } from "firebase/firestore"
 
-const ProfileScreen = () => {
+const ProfileScreen = ({ theme, darkMode }) => {
   const navigation = useNavigation()
   const [user, setUser] = useState(null)
   const [profileData, setProfileData] = useState({
     name: "",
     email: "",
-    phoneNumber: "",
     avatar: "https://blob.v0.dev/pjtmy8OGJ.png",
     totalTasks: 0,
     completedTasks: 0,
   })
-
   const [usernameInput, setUsernameInput] = useState("")
-  const [phoneNumberInput, setPhoneNumberInput] = useState("")
   const [newPassword, setNewPassword] = useState("")
   const [confirmNewPassword, setConfirmNewPassword] = useState("")
   const [passwordError, setPasswordError] = useState("")
-  const [phoneNumberError, setPhoneNumberError] = useState("")
   const [profileUpdateMessage, setProfileUpdateMessage] = useState("")
   const [passwordUpdateMessage, setPasswordUpdateMessage] = useState("")
   const [isEditingProfile, setIsEditingProfile] = useState(false)
   const [isChangingPassword, setIsChangingPassword] = useState(false)
+
+  // Create dynamic styles based on theme
+  const styles = createStyles(theme)
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -36,16 +37,13 @@ const ProfileScreen = () => {
         setProfileData((prev) => ({ ...prev, email: currentUser.email }))
         const userDocRef = doc(db, "users", currentUser.uid)
         const docSnap = await getDoc(userDocRef)
-
         if (docSnap.exists()) {
           const data = docSnap.data()
           setProfileData((prev) => ({
             ...prev,
             name: data.name || "",
-            phoneNumber: data.phoneNumber || "",
           }))
           setUsernameInput(data.name || "")
-          setPhoneNumberInput(data.phoneNumber || "")
         } else {
           await setDoc(
             userDocRef,
@@ -53,22 +51,18 @@ const ProfileScreen = () => {
               email: currentUser.email,
               uid: currentUser.uid,
               name: currentUser.displayName || "",
-              phoneNumber: "",
             },
-            { merge: true }
+            { merge: true },
           )
           setUsernameInput(currentUser.displayName || "")
         }
-
-        // 🔄 Fetch user-specific task stats
+        // Fetch user-specific task stats
         try {
           const tasksRef = collection(db, "tasks")
           const q = query(tasksRef, where("userId", "==", currentUser.uid))
           const querySnapshot = await getDocs(q)
-
           const total = querySnapshot.size
           const completed = querySnapshot.docs.filter((doc) => doc.data().status === "completed").length
-
           setProfileData((prev) => ({
             ...prev,
             totalTasks: total,
@@ -81,7 +75,6 @@ const ProfileScreen = () => {
         setUser(null)
       }
     })
-
     return unsubscribe
   }, [])
 
@@ -96,30 +89,7 @@ const ProfileScreen = () => {
 
   const handleUpdateProfile = async () => {
     setProfileUpdateMessage("")
-    setPhoneNumberError("")
     if (!user) return setProfileUpdateMessage("User not logged in.")
-
-    const phoneNumberRegex = /^0[0-9]{9}$/
-    if (phoneNumberInput && !phoneNumberRegex.test(phoneNumberInput)) {
-      setPhoneNumberError("Phone number must start with 0 and be 10 digits long.")
-      return
-    }
-
-    if (phoneNumberInput && phoneNumberInput !== profileData.phoneNumber) {
-      try {
-        const usersCollectionRef = collection(db, "users")
-        const q = query(usersCollectionRef, where("phoneNumber", "==", phoneNumberInput))
-        const querySnapshot = await getDocs(q)
-        if (!querySnapshot.empty) {
-          setPhoneNumberError("This phone number is already in use by another user.")
-          return
-        }
-      } catch (error) {
-        console.error("Error checking phone number uniqueness:", error)
-        setPhoneNumberError("Error checking phone number uniqueness.")
-        return
-      }
-    }
 
     try {
       const userDocRef = doc(db, "users", user.uid)
@@ -127,17 +97,14 @@ const ProfileScreen = () => {
         userDocRef,
         {
           name: usernameInput,
-          phoneNumber: phoneNumberInput,
           email: user.email,
           uid: user.uid,
         },
-        { merge: true }
+        { merge: true },
       )
-
       setProfileData((prev) => ({
         ...prev,
         name: usernameInput,
-        phoneNumber: phoneNumberInput,
       }))
       setProfileUpdateMessage("Profile updated successfully!")
       setIsEditingProfile(false)
@@ -156,7 +123,6 @@ const ProfileScreen = () => {
     if (newPassword !== confirmNewPassword) {
       return setPasswordError("New password and confirm password do not match.")
     }
-
     try {
       await updatePassword(user, newPassword)
       setPasswordUpdateMessage("Password updated successfully!")
@@ -177,18 +143,16 @@ const ProfileScreen = () => {
     <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#f8f8f8" />
+          <Ionicons name="arrow-back" size={24} color={theme.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Profile</Text>
         <View style={styles.headerRight} />
       </View>
-
       <ScrollView contentContainerStyle={styles.scrollViewContent}>
         <View style={styles.profileCard}>
           <Image source={{ uri: profileData.avatar }} style={styles.avatar} />
           <Text style={styles.name}>{profileData.name || "No Name Set"}</Text>
           <Text style={styles.email}>{profileData.email}</Text>
-
           <View style={styles.statsContainer}>
             <View style={styles.statItem}>
               <Text style={styles.statNumber}>{profileData.totalTasks}</Text>
@@ -200,7 +164,6 @@ const ProfileScreen = () => {
               <Text style={styles.statLabel}>Completed</Text>
             </View>
           </View>
-
           {!isEditingProfile ? (
             <TouchableOpacity style={styles.editProfileButton} onPress={() => setIsEditingProfile(true)}>
               <Text style={styles.editProfileButtonText}>Edit Profile</Text>
@@ -215,42 +178,29 @@ const ProfileScreen = () => {
                   value={usernameInput}
                   onChangeText={setUsernameInput}
                   placeholder="Enter your username"
-                  placeholderTextColor="#888"
+                  placeholderTextColor={theme.textTertiary}
                 />
               </View>
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Phone Number</Text>
-                <TextInput
-                  style={styles.input}
-                  value={phoneNumberInput}
-                  onChangeText={setPhoneNumberInput}
-                  placeholder="e.g., 0123456789"
-                  placeholderTextColor="#888"
-                  keyboardType="phone-pad"
-                />
-                {phoneNumberError ? <Text style={styles.errorText}>{phoneNumberError}</Text> : null}
-              </View>
-              {profileUpdateMessage ? <Text style={styles.messageText}>{profileUpdateMessage}</Text> : null}
+              {profileUpdateMessage ? (
+                <Text style={[styles.messageText, { color: theme.success }]}>{profileUpdateMessage}</Text>
+              ) : null}
               <View style={styles.buttonRow}>
                 <TouchableOpacity style={styles.saveButton} onPress={handleUpdateProfile}>
-                  <Text style={styles.editProfileButtonText}>Save Profile</Text>
+                  <Text style={styles.buttonText}>Save Profile</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.cancelButton}
                   onPress={() => {
                     setIsEditingProfile(false)
                     setUsernameInput(profileData.name)
-                    setPhoneNumberInput(profileData.phoneNumber)
-                    setPhoneNumberError("")
                     setProfileUpdateMessage("")
                   }}
                 >
-                  <Text style={styles.editProfileButtonText}>Cancel</Text>
+                  <Text style={styles.buttonText}>Cancel</Text>
                 </TouchableOpacity>
               </View>
             </View>
           )}
-
           {!isChangingPassword ? (
             <TouchableOpacity style={styles.editProfileButton} onPress={() => setIsChangingPassword(true)}>
               <Text style={styles.editProfileButtonText}>Change Password</Text>
@@ -265,7 +215,7 @@ const ProfileScreen = () => {
                   value={newPassword}
                   onChangeText={setNewPassword}
                   placeholder="Enter new password"
-                  placeholderTextColor="#888"
+                  placeholderTextColor={theme.textTertiary}
                   secureTextEntry
                 />
               </View>
@@ -276,15 +226,17 @@ const ProfileScreen = () => {
                   value={confirmNewPassword}
                   onChangeText={setConfirmNewPassword}
                   placeholder="Confirm new password"
-                  placeholderTextColor="#888"
+                  placeholderTextColor={theme.textTertiary}
                   secureTextEntry
                 />
                 {passwordError ? <Text style={styles.errorText}>{passwordError}</Text> : null}
               </View>
-              {passwordUpdateMessage ? <Text style={styles.messageText}>{passwordUpdateMessage}</Text> : null}
+              {passwordUpdateMessage ? (
+                <Text style={[styles.messageText, { color: theme.success }]}>{passwordUpdateMessage}</Text>
+              ) : null}
               <View style={styles.buttonRow}>
                 <TouchableOpacity style={styles.saveButton} onPress={handleChangePassword}>
-                  <Text style={styles.editProfileButtonText}>Update Password</Text>
+                  <Text style={styles.buttonText}>Update Password</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.cancelButton}
@@ -296,7 +248,7 @@ const ProfileScreen = () => {
                     setPasswordUpdateMessage("")
                   }}
                 >
-                  <Text style={styles.editProfileButtonText}>Cancel</Text>
+                  <Text style={styles.buttonText}>Cancel</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -307,187 +259,199 @@ const ProfileScreen = () => {
   )
 }
 
-const originalStyles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#202327",
-    paddingTop: Platform.OS === "android" ? 30 : 50,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 15,
-    paddingBottom: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: "#3A3D42",
-  },
-  backButton: {
-    padding: 5,
-  },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: "bold",
-    color: "#f8f8f8",
-  },
-  headerRight: {
-    width: 24, // To balance the back button
-  },
-  scrollViewContent: {
-    flexGrow: 1,
-    alignItems: "center",
-    paddingVertical: 20,
-  },
-  profileCard: {
-    width: "90%",
-    backgroundColor: "#2C2F33",
-    borderRadius: 15,
-    padding: 20,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 10,
-  },
-  avatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    marginBottom: 15,
-    borderWidth: 3,
-    borderColor: "#0077b6",
-  },
-  name: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#f8f8f8",
-    marginBottom: 5,
-  },
-  email: {
-    fontSize: 16,
-    color: "#ccc",
-    marginBottom: 20,
-  },
-  statsContainer: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    width: "100%",
-    marginBottom: 20,
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: "#3A3D42",
-  },
-  statItem: {
-    alignItems: "center",
-  },
-  statNumber: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#7ED321",
-  },
-  statLabel: {
-    fontSize: 14,
-    color: "#ccc",
-  },
-  statSeparator: {
-    width: 1,
-    backgroundColor: "#3A3D42",
-    marginHorizontal: 10,
-  },
-  section: {
-    width: "100%",
-    marginBottom: 20,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#f8f8f8",
-    marginBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#444",
-    paddingBottom: 5,
-  },
-  sectionContent: {
-    fontSize: 15,
-    color: "#ccc",
-    lineHeight: 22,
-  },
-  editProfileButton: {
-    backgroundColor: "#0077b6",
-    paddingVertical: 12,
-    paddingHorizontal: 25,
-    borderRadius: 10,
-    marginTop: 20,
-  },
-  editProfileButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-})
-
-const newStyles = StyleSheet.create({
-  editSection: {
-    width: "100%",
-    marginTop: 20,
-    paddingTop: 15,
-    borderTopWidth: 1,
-    borderTopColor: "#3A3D42",
-  },
-  inputGroup: {
-    marginBottom: 15,
-  },
-  label: {
-    fontSize: 16,
-    color: "#f8f8f8",
-    marginBottom: 5,
-  },
-  input: {
-    backgroundColor: "#3A3D42",
-    color: "#f8f8f8",
-    borderRadius: 8,
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    fontSize: 16,
-  },
-  errorText: {
-    color: "#ff6b6b", // A red color for errors
-    fontSize: 13,
-    marginTop: 5,
-  },
-  messageText: {
-    color: "#7ED321", // A green color for success messages
-    fontSize: 14,
-    marginTop: 10,
-    textAlign: "center",
-  },
-  buttonRow: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginTop: 15,
-  },
-  saveButton: {
-    backgroundColor: "#0077b6",
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-    flex: 1,
-    marginRight: 5,
-    alignItems: "center",
-  },
-  cancelButton: {
-    backgroundColor: "#6c757d", // A grey color for cancel
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-    flex: 1,
-    marginLeft: 5,
-    alignItems: "center",
-  },
-})
-
-const styles = { ...originalStyles, ...newStyles }
+// Dynamic styles function
+const createStyles = (theme) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: theme.background,
+      paddingTop: Platform.OS === "android" ? 30 : 50,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: 15,
+      paddingBottom: 15,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
+    backButton: {
+      padding: 5,
+    },
+    headerTitle: {
+      fontSize: 22,
+      fontWeight: "bold",
+      color: theme.text,
+    },
+    headerRight: {
+      width: 24, // To balance the back button
+    },
+    scrollViewContent: {
+      flexGrow: 1,
+      alignItems: "center",
+      paddingVertical: 20,
+    },
+    profileCard: {
+      width: "90%",
+      backgroundColor: theme.surface,
+      borderRadius: 15,
+      padding: 20,
+      alignItems: "center",
+      shadowColor: theme.shadow,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 8,
+      elevation: 10,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    avatar: {
+      width: 100,
+      height: 100,
+      borderRadius: 50,
+      marginBottom: 15,
+      borderWidth: 3,
+      borderColor: theme.primary,
+    },
+    name: {
+      fontSize: 24,
+      fontWeight: "bold",
+      color: theme.text,
+      marginBottom: 5,
+    },
+    email: {
+      fontSize: 16,
+      color: theme.textSecondary,
+      marginBottom: 20,
+    },
+    statsContainer: {
+      flexDirection: "row",
+      justifyContent: "space-around",
+      width: "100%",
+      marginBottom: 20,
+      paddingVertical: 15,
+      borderTopWidth: 1,
+      borderBottomWidth: 1,
+      borderColor: theme.border,
+      backgroundColor: theme.background,
+      borderRadius: 10,
+    },
+    statItem: {
+      alignItems: "center",
+    },
+    statNumber: {
+      fontSize: 24,
+      fontWeight: "bold",
+      color: theme.primary,
+      marginBottom: 4,
+    },
+    statLabel: {
+      fontSize: 14,
+      color: theme.textSecondary,
+      fontWeight: "500",
+    },
+    statSeparator: {
+      width: 1,
+      backgroundColor: theme.border,
+      marginHorizontal: 10,
+    },
+    sectionTitle: {
+      fontSize: 18,
+      fontWeight: "bold",
+      color: theme.text,
+      marginBottom: 15,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+      paddingBottom: 8,
+    },
+    editProfileButton: {
+      backgroundColor: theme.primary,
+      paddingVertical: 12,
+      paddingHorizontal: 30,
+      borderRadius: 12,
+      marginTop: 15,
+      shadowColor: theme.shadow,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 4,
+      elevation: 3,
+    },
+    editProfileButtonText: {
+      color: "#fff",
+      fontSize: 16,
+      fontWeight: "bold",
+    },
+    editSection: {
+      width: "100%",
+      marginTop: 20,
+      paddingTop: 20,
+      borderTopWidth: 1,
+      borderTopColor: theme.border,
+    },
+    inputGroup: {
+      marginBottom: 15,
+    },
+    label: {
+      fontSize: 16,
+      color: theme.text,
+      marginBottom: 8,
+      fontWeight: "600",
+    },
+    input: {
+      backgroundColor: theme.background,
+      color: theme.text,
+      borderRadius: 10,
+      paddingHorizontal: 15,
+      paddingVertical: 12,
+      fontSize: 16,
+      borderWidth: 1,
+      borderColor: theme.border,
+    },
+    errorText: {
+      color: theme.danger,
+      fontSize: 13,
+      marginTop: 5,
+      fontWeight: "500",
+    },
+    messageText: {
+      fontSize: 14,
+      marginTop: 10,
+      textAlign: "center",
+      fontWeight: "500",
+    },
+    buttonRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      marginTop: 20,
+      gap: 10,
+    },
+    saveButton: {
+      backgroundColor: theme.primary,
+      paddingVertical: 12,
+      paddingHorizontal: 20,
+      borderRadius: 10,
+      flex: 1,
+      alignItems: "center",
+      shadowColor: theme.shadow,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 4,
+      elevation: 3,
+    },
+    cancelButton: {
+      backgroundColor: theme.textTertiary,
+      paddingVertical: 12,
+      paddingHorizontal: 20,
+      borderRadius: 10,
+      flex: 1,
+      alignItems: "center",
+    },
+    buttonText: {
+      color: "#fff",
+      fontSize: 16,
+      fontWeight: "bold",
+    },
+  })
 
 export default ProfileScreen
