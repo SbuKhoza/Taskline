@@ -2,7 +2,7 @@
   "expo": {
     "name": "SnapTask",
     "slug": "snaptask",
-    "version": "1.0.0",
+    "version": "Beta",
     "orientation": "portrait",
     "icon": "./assets/logo2.png",
     "userInterfaceStyle": "light",
