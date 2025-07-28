@@ -26,11 +26,11 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
+    "owner": "sbudamalloya",
     "extra": {
       "eas": {
-        "projectId": "b0556841-8b58-48f2-b0f8-af1528546645"
+        "projectId": "89109d56-2cd0-4b49-aa62-65472842e236"
       }
-    },
-    "owner": "sbudamalloya"
+    }
   }
 }
