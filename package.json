@@ -1,7 +1,7 @@
 {
-  "name": "malloya-todolist",
+  "name": "snaptask",
   "license": "0BSD",
-  "version": "1.0.0.Beta",
+  "version": "Beta",
   "main": "index.js",
   "scripts": {
     "start": "expo start",
