@@ -1,7 +1,7 @@
 "use client"
 import { useState, useEffect } from "react"
 import { NavigationContainer } from "@react-navigation/native"
-import { createStackNavigator } from "@react-navigation/stack"
+import { createNativeStackNavigator } from "@react-navigation/native-stack"
 import { onAuthStateChanged } from "firebase/auth"
 import { auth } from "./firebase/config"
 import MainScreen from "./screens/MainScreen"
@@ -14,7 +14,7 @@ import Splash from "./screens/Splash" // Import your Splash component
 import { View, ActivityIndicator, StyleSheet, Text, StatusBar } from "react-native"
 import AsyncStorage from "@react-native-async-storage/async-storage"
 
-const Stack = createStackNavigator()
+const Stack = createNativeStackNavigator()
 
 // Theme definitions
 export const lightTheme = {
