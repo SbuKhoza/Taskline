@@ -7,10 +7,10 @@ import {
   TouchableOpacity,
   Modal,
   ScrollView,
-  SafeAreaView,
   Image,
   Animated,
 } from "react-native"
+import { SafeAreaView } from "react-native-safe-area-context"
 import { useState, useRef, useEffect } from "react"
 import { Ionicons } from "@expo/vector-icons"
 import {
