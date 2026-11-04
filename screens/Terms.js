@@ -6,8 +6,8 @@ import {
   StyleSheet,
   TouchableOpacity,
   StatusBar,
-  SafeAreaView,
 } from 'react-native';
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from '@expo/vector-icons';
 
 const Terms = ({ navigation, theme }) => {
