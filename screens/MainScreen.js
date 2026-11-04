@@ -14,6 +14,8 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
+  StatusBar,
+  useWindowDimensions,
 } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import DateTimePickerModal from "react-native-modal-datetime-picker"
@@ -31,7 +33,7 @@ import {
   getDoc,
   deleteDoc,
 } from "firebase/firestore"
-import { useNavigation } from "@react-navigation/native"
+import { useNavigation, useIsFocused } from "@react-navigation/native"
 
 // Placeholder avatars
 const avatars = {
@@ -40,6 +42,46 @@ const avatars = {
   user2: "https://blob.v0.dev/pjtmy8OGJ.png",
   user3: "https://blob.v0.dev/pjtmy8OGJ.png",
 }
+
+
+const HERO_HEIGHT = Platform.OS === "android" ? 180 : 200
+
+// ---- Home screen visual palette (matches the new design) ----
+const getUiPalette = (dark) => ({
+  pageBg: dark ? "#0B1220" : "#EEF4FC",
+  cardBg: dark ? "#141C2E" : "#FFFFFF",
+  rowBg: dark ? "#1B2438" : "#FFFFFF",
+  chipBg: dark ? "#1B2438" : "#F1F3F7",
+  chipBorder: dark ? "#2A3550" : "#E6E9EF",
+  title: dark ? "#F2F5FA" : "#0F1B3D",
+  subtitle: dark ? "#A8B3C7" : "#3A4560",
+  muted: dark ? "#8693AB" : "#6B7488",
+  checkBorder: dark ? "#4A566E" : "#C9CDD4",
+  blue: "#0B6CF0",
+  blueDark: "#0A55C8",
+  green: "#22B14C",
+  greenDark: "#1E9E45",
+  tones: {
+    green: { accent: "#22C55E", tint: dark ? "#143626" : "#E4F7E8", text: "#1F9D45", pill: dark ? "#143626" : "#D5F3DC" },
+    blue: { accent: "#1E88F0", tint: dark ? "#122B4A" : "#E4F1FD", text: "#1368C9", pill: dark ? "#122B4A" : "#D3E8FB" },
+    red: { accent: "#EF4444", tint: dark ? "#47181C" : "#FDE4E4", text: "#C81E1E", pill: dark ? "#47181C" : "#FBD0D0" },
+    amber: { accent: "#F59E0B", tint: dark ? "#47340F" : "#FEF1D6", text: "#B26A00", pill: dark ? "#47340F" : "#FDE7B8" },
+  },
+})
+
+// completed -> green, otherwise by priority
+const getTaskTone = (task) => {
+  if (task.completed) return "green"
+  if (task.priority === "Very Important") return "red"
+  if (task.priority === "Important") return "amber"
+  return "blue"
+}
+
+// 11:10 am style
+const formatTime = (d) =>
+  new Date(d)
+    .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+    .toLowerCase()
 
 const MainScreen = ({ user, theme, darkMode }) => {
   const navigation = useNavigation()
@@ -76,7 +118,12 @@ const MainScreen = ({ user, theme, darkMode }) => {
   const [refreshKey, setRefreshKey] = useState(0)
 
   // Create dynamic styles based on theme
-  const styles = createStyles(theme)
+  const styles = createStyles(theme, darkMode)
+
+  const { width: screenWidth } = useWindowDimensions()
+  const ui = getUiPalette(darkMode)
+
+  const isFocused = useIsFocused()
 
   // Effect to fetch username from Firestore
   useEffect(() => {
@@ -448,6 +495,27 @@ const MainScreen = ({ user, theme, darkMode }) => {
     }
   }
 
+  // Quick toggle from the checkbox on a task row (no alert / modal)
+  const toggleTaskCompleteQuick = async (task) => {
+    if (!user) return
+    const originalTaskId = task.originalTaskId || task.id
+    const taskRef = doc(db, "tasks", originalTaskId)
+    try {
+      if (task.recurring) {
+        const dateStr = new Date(task.instanceDate).toDateString()
+        const originalTask = tasks.find((t) => t.id === originalTaskId)
+        let instances = (originalTask && originalTask.completedInstances) || []
+        instances = instances.includes(dateStr) ? instances.filter((d) => d !== dateStr) : [...instances, dateStr]
+        await updateDoc(taskRef, { completedInstances: instances })
+      } else {
+        await updateDoc(taskRef, { completed: !task.completed })
+      }
+    } catch (error) {
+      console.error("Error toggling task: ", error)
+      alert("Failed to update task. Please try again.")
+    }
+  }
+
   const archiveTask = async (taskToArchive) => {
     if (!user) {
       alert("You must be logged in to archive tasks.")
@@ -530,16 +598,16 @@ const MainScreen = ({ user, theme, darkMode }) => {
     }
   })
 
-  const getIcon = (tab) => {
+  const getIcon = (tab, active) => {
     switch (tab) {
       case "Home":
-        return "home-outline"
+        return active ? "home" : "home-outline"
       case "Tasks":
-        return "list-outline"
+        return "list"
       case "More":
-        return "ellipsis-horizontal-outline"
+        return "ellipsis-horizontal"
       case "Profile":
-        return "person-outline"
+        return active ? "person" : "person-outline"
       default:
         return "square-outline"
     }
@@ -724,17 +792,81 @@ const MainScreen = ({ user, theme, darkMode }) => {
     }
   }
 
+  const pendingToday = tasksForSelectedDate.filter((t) => !t.completed).length
+
+  const renderTaskRow = (task, showDate = false) => {
+    const tone = ui.tones[getTaskTone(task)]
+    return (
+      <TouchableOpacity
+        key={task.id}
+        activeOpacity={0.85}
+        onPress={() => handleEdit(task)}
+        style={[styles.taskCard, { backgroundColor: ui.rowBg, borderLeftColor: tone.accent }]}
+      >
+        <View style={[styles.timeBlock, { backgroundColor: tone.tint }]}>
+          <Ionicons name="time-outline" size={18} color={tone.text} />
+          <Text style={[styles.timeBlockText, { color: ui.title }]}>{formatTime(task.instanceDate)}</Text>
+        </View>
+        <TouchableOpacity
+          onPress={() => toggleTaskCompleteQuick(task)}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={[
+            styles.checkCircle,
+            task.completed
+              ? { backgroundColor: ui.green, borderColor: ui.green }
+              : { borderColor: ui.checkBorder },
+          ]}
+        >
+          {task.completed && <Ionicons name="checkmark" size={16} color="#fff" />}
+        </TouchableOpacity>
+        <View style={styles.taskTextWrap}>
+          <Text
+            numberOfLines={1}
+            style={[styles.taskTitle, { color: ui.title }, task.completed && styles.taskTitleDone]}
+          >
+            {task.title}
+          </Text>
+          {showDate && (
+            <Text style={[styles.taskDate, { color: ui.muted }]}>
+              {new Date(task.instanceDate).toLocaleDateString("en-ZA", { day: "numeric", month: "short" })}
+            </Text>
+          )}
+        </View>
+        <View style={[styles.priorityPill, { backgroundColor: tone.pill }]}>
+          <Text numberOfLines={1} style={[styles.priorityPillText, { color: tone.text }]}>
+            {task.priority}
+          </Text>
+        </View>
+      </TouchableOpacity>
+    )
+  }
+
   return (
     <View style={styles.container}>
-      {/* Top Header with Greeting and Notification */}
-      <View style={styles.topHeader}>
-        <View>
+      {isFocused && <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />}
+      {/* Hero header */}
+      <View style={[styles.hero, { height: HERO_HEIGHT }]}>
+        <View style={styles.heroGlow} />
+        <Image
+          source={require("../assets/header-skyline.png")}
+          resizeMode="cover"
+          style={[styles.heroImage, { width: screenWidth * 0.78, height: HERO_HEIGHT - 20 }]}
+        />
+        <View style={styles.heroTextWrap}>
           <Text style={styles.greetingText}>{getGreeting()}</Text>
-          {user && fetchedUsername && <Text style={styles.usernameText}>{fetchedUsername}</Text>}
+          {user && fetchedUsername ? <Text style={styles.usernameText}>{fetchedUsername}</Text> : null}
+          <View style={styles.greetingUnderline} />
         </View>
-        <TouchableOpacity onPress={() => console.log("Notifications clicked")}>
-          <Ionicons name="notifications-outline" size={24} color={theme.text} />
+        <TouchableOpacity
+          style={styles.bellButton}
+          onPress={() => console.log("Notifications clicked")}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="notifications-outline" size={24} color="#fff" />
+          {pendingToday > 0 && <View style={styles.bellDot} />}
         </TouchableOpacity>
+        <View style={styles.heroWaveGreen} />
+        <View style={[styles.heroWaveCover, { backgroundColor: ui.pageBg }]} />
       </View>
 
       {loadingTasks && refreshing ? (
@@ -746,87 +878,66 @@ const MainScreen = ({ user, theme, darkMode }) => {
         <View style={styles.mainCard}>
           {/* Date and Task Count */}
           <View style={styles.dateSummaryContainer}>
-            <View>
-              <Text style={styles.dateText}>
-                {selectedDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })}
-              </Text>
-              <Text style={styles.taskCountText}>{tasksForSelectedDate.length} tasks today</Text>
+            <View style={styles.dateLeft}>
+              <Ionicons name="calendar-outline" size={32} color={ui.blue} />
+              <View style={{ marginLeft: 12 }}>
+                <Text style={styles.dateText}>
+                  {selectedDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })}
+                </Text>
+                <Text style={styles.taskCountText}>
+                  {tasksForSelectedDate.length} {tasksForSelectedDate.length === 1 ? "task" : "tasks"}{" "}
+                  {selectedDate.toDateString() === new Date().toDateString() ? "today" : "this day"}
+                </Text>
+              </View>
             </View>
             <TouchableOpacity style={styles.calendarButtonLarge} onPress={() => setShowMonthCalendar(true)}>
-              <Ionicons name="calendar-outline" size={24} color="#fff" />
+              <Ionicons name="calendar" size={20} color={ui.greenDark} />
             </TouchableOpacity>
           </View>
 
           {/* Weekly Calendar */}
-          <View style={styles.calendarContainer}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.calendarScroll}>
-              {daysOfWeek.map((d, i) => (
-                <TouchableOpacity
-                  key={i}
-                  style={[styles.dayBlock, d.isSelected && styles.selectedDayBlock]}
-                  onPress={() => setSelectedDate(d.date)}
-                >
-                  <Text style={[styles.dayLabel, d.isSelected && styles.selectedDayLabel]}>
-                    {d.label.split(" ")[0]}
-                  </Text>
-                  <Text style={[styles.dayNumber, d.isSelected && styles.selectedDayNumber]}>
-                    {d.label.split(" ")[1]}
-                  </Text>
-                  {d.isSelected && <View style={styles.selectedDayDot} />}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-
-          {/* Timeline */}
           <ScrollView
-            style={styles.timelineScrollView}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.calendarScroll}
+            contentContainerStyle={styles.calendarScrollContent}
+          >
+            {daysOfWeek.map((d, i) => (
+              <TouchableOpacity
+                key={i}
+                activeOpacity={0.85}
+                style={[styles.dayBlock, d.isSelected && styles.selectedDayBlock]}
+                onPress={() => setSelectedDate(d.date)}
+              >
+                <Text style={[styles.dayLabel, d.isSelected && styles.selectedDayLabel]}>
+                  {d.label.split(" ")[0]}
+                </Text>
+                <Text style={[styles.dayNumber, d.isSelected && styles.selectedDayNumber]}>
+                  {d.label.split(" ")[1]}
+                </Text>
+                {d.isSelected && <View style={styles.selectedDayDot} />}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          {/* Task list */}
+          <ScrollView
+            style={styles.taskScroll}
+            contentContainerStyle={styles.taskScrollContent}
+            showsVerticalScrollIndicator={false}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.primary} />}
           >
-            <View style={styles.timelineContent}>
-              {tasksForSelectedDate.length > 0 && <View style={styles.timelineLine} />}
-              {tasksForSelectedDate.map((task, index) => (
-                <View key={task.id} style={styles.timelineRow}>
-                  <Text style={styles.timeSlotText}>
-                    {new Date(task.instanceDate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  </Text>
-                  <View style={styles.timelineDot} />
-                  <TouchableOpacity
-                    style={[styles.taskTimelineItem, { backgroundColor: task.color || theme.primary }]}
-                    onPress={() => handleEdit(task)}
-                  >
-                    {task.avatar && !task.avatars && (
-                      <Image source={{ uri: task.avatar }} style={styles.taskTimelineAvatar} />
-                    )}
-                    {task.avatars && task.avatars.length > 0 && (
-                      <View style={styles.taskTimelineAvatarsGroup}>
-                        {task.avatars.map((avatarUri, idx) => (
-                          <Image key={idx} source={{ uri: avatarUri }} style={styles.taskTimelineAvatarSmall} />
-                        ))}
-                      </View>
-                    )}
-                    <View style={styles.taskInfoContainer}>
-                      <View style={styles.taskTimelineTitleContainer}>
-                        <Text style={[styles.taskTimelineTitle, task.completed && styles.completedText]}>
-                          {task.title}
-                        </Text>
-                        {task.completed && (
-                          <Ionicons name="checkmark-circle" size={20} color="#fff" style={styles.completedTick} />
-                        )}
-                      </View>
-                      <View style={[styles.priorityBadge, { backgroundColor: getPriorityColor(task.priority) }]}>
-                        <Text style={styles.priorityBadgeText}>{task.priority}</Text>
-                      </View>
-                    </View>
-                  </TouchableOpacity>
-                </View>
-              ))}
-              {tasksForSelectedDate.length === 0 && <Text style={styles.noTasksText}>No tasks for this day.</Text>}
-            </View>
+            {tasksForSelectedDate.map((task) => renderTaskRow(task))}
+            {tasksForSelectedDate.length === 0 && (
+              <View style={styles.emptyWrap}>
+                <Ionicons name="checkmark-done-circle-outline" size={44} color={ui.checkBorder} />
+                <Text style={styles.noTasksText}>No tasks for this day.</Text>
+              </View>
+            )}
           </ScrollView>
 
           {/* Add Task Button (Floating) */}
-          <TouchableOpacity style={styles.fab} onPress={openAddModal}>
+          <TouchableOpacity style={styles.fab} onPress={openAddModal} activeOpacity={0.9}>
             <Ionicons name="add" size={30} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -1248,31 +1359,7 @@ const MainScreen = ({ user, theme, darkMode }) => {
             <FlatList
               data={getTasksForCurrentTab()}
               keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[styles.taskListItem, { backgroundColor: item.color || theme.primary }]}
-                  onPress={() => handleEdit(item)}
-                >
-                  <View style={styles.taskListItemContent}>
-                    <View style={styles.taskListItemTitleContainer}>
-                      <Text style={[styles.taskListItemTitle, item.completed && styles.completedText]}>
-                        {item.title}
-                      </Text>
-                      {item.completed && (
-                        <Ionicons name="checkmark-circle" size={20} color="#fff" style={styles.completedTick} />
-                      )}
-                    </View>
-                    <View style={[styles.priorityBadge, { backgroundColor: getPriorityColor(item.priority) }]}>
-                      <Text style={styles.priorityBadgeText}>{item.priority}</Text>
-                    </View>
-                  </View>
-                  <Text style={styles.taskListItemDate}>
-                    {new Date(item.instanceDate).toLocaleDateString()}
-                    {" at "}
-                    {new Date(item.instanceDate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  </Text>
-                </TouchableOpacity>
-              )}
+              renderItem={({ item }) => renderTaskRow(item, true)}
               ListEmptyComponent={() => <Text style={styles.noTasksText}>No tasks in this category.</Text>}
               contentContainerStyle={styles.taskListContainer}
             />
@@ -1319,134 +1406,203 @@ const MainScreen = ({ user, theme, darkMode }) => {
 
       {/* Bottom Nav */}
       <View style={styles.bottomNav}>
-        {["Home", "Tasks", "More", "Profile"].map((tab) => (
-          <TouchableOpacity
-            key={tab}
-            onPress={
-              tab === "Tasks"
-                ? () => setShowTaskTabsModal(true)
-                : tab === "More"
-                  ? () => setShowMoreModal(true)
-                  : tab === "Profile"
-                    ? () => navigation.navigate("Profile")
-                    : () => setActiveTab(tab)
-            }
-            style={styles.navItem}
-          >
-            <Ionicons name={getIcon(tab)} size={24} color={activeTab === tab ? theme.primary : theme.textTertiary} />
-            <Text style={[styles.navText, { color: activeTab === tab ? theme.primary : theme.textTertiary }]}>
-              {tab}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        {["Home", "Tasks", "More", "Profile"].map((tab) => {
+          const active = activeTab === tab
+          return (
+            <TouchableOpacity
+              key={tab}
+              onPress={
+                tab === "Tasks"
+                  ? () => setShowTaskTabsModal(true)
+                  : tab === "More"
+                    ? () => setShowMoreModal(true)
+                    : tab === "Profile"
+                      ? () => navigation.navigate("Profile")
+                      : () => setActiveTab(tab)
+              }
+              style={styles.navItem}
+              activeOpacity={0.8}
+            >
+              <Ionicons name={getIcon(tab, active)} size={24} color={active ? ui.blue : ui.muted} />
+              <Text style={[styles.navText, { color: active ? ui.blue : ui.muted }, active && styles.navTextActive]}>
+                {tab}
+              </Text>
+              <View style={[styles.navIndicator, active && { backgroundColor: ui.blue }]} />
+            </TouchableOpacity>
+          )
+        })}
       </View>
     </View>
   )
 }
 
 // Dynamic styles function
-const createStyles = (theme) =>
+const createStyles = (theme, darkMode) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.background,
-      justifyContent: "flex-start",
-      alignItems: "center",
-      paddingTop: Platform.OS === "android" ? 30 : 50,
+      backgroundColor: darkMode ? "#0B1220" : "#EEF4FC",
     },
-    topHeader: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      width: "95%",
-      marginBottom: 20,
-      marginTop: 10,
-      paddingHorizontal: 5,
+    // ---- hero ----
+    hero: {
+      width: "100%",
+      backgroundColor: "#0560C8",
+      overflow: "hidden",
+    },
+    heroGlow: {
+      position: "absolute",
+      left: -60,
+      right: -60,
+      bottom: -40,
+      height: 140,
+      borderRadius: 200,
+      backgroundColor: "rgba(110, 180, 245, 0.35)",
+    },
+    heroImage: {
+      position: "absolute",
+      right: 0,
+      top: 10,
+    },
+    heroTextWrap: {
+      position: "absolute",
+      left: 20,
+      top: Platform.OS === "android" ? (StatusBar.currentHeight || 24) + 10 : 56,
     },
     greetingText: {
-      fontSize: 20,
-      fontWeight: "700",
-      color: theme.text,
+      fontSize: 26,
+      fontWeight: "800",
+      color: "#fff",
+      letterSpacing: 0.2,
     },
     usernameText: {
-      fontSize: 16,
-      fontWeight: "500",
-      color: theme.textSecondary,
+      fontSize: 19,
+      fontWeight: "400",
+      color: "#fff",
       marginTop: 2,
     },
+    greetingUnderline: {
+      width: 56,
+      height: 4,
+      borderRadius: 3,
+      backgroundColor: "#4ADE6B",
+      marginTop: 9,
+    },
+    bellButton: {
+      position: "absolute",
+      right: 20,
+      top: Platform.OS === "android" ? (StatusBar.currentHeight || 24) + 10 : 56,
+    },
+    bellDot: {
+      position: "absolute",
+      top: 0,
+      right: 1,
+      width: 9,
+      height: 9,
+      borderRadius: 6,
+      backgroundColor: "#FF3B30",
+    },
+    heroWaveGreen: {
+      position: "absolute",
+      left: -80,
+      right: -80,
+      bottom: -62,
+      height: 90,
+      borderRadius: 400,
+      backgroundColor: "#3FCB5E",
+      transform: [{ rotate: "-2deg" }],
+    },
+    heroWaveCover: {
+      position: "absolute",
+      left: -60,
+      right: -60,
+      bottom: -78,
+      height: 90,
+      borderRadius: 400,
+    },
+    // ---- main card ----
     mainCard: {
       flex: 1,
-      width: "100%",
-      backgroundColor: theme.surface,
-      borderRadius: 25,
-      paddingHorizontal: 20,
+      marginHorizontal: 12,
+      marginTop: -26,
+      marginBottom: 86,
+      backgroundColor: darkMode ? "#141C2E" : "#FFFFFF",
+      borderRadius: 24,
       paddingTop: 20,
-      paddingBottom: 20,
-      shadowColor: theme.shadow,
-      shadowOffset: { width: 0, height: 10 },
-      shadowOpacity: 0.5,
-      shadowRadius: 20,
-      elevation: 15,
-      marginBottom: 80,
+      paddingHorizontal: 0,
+      shadowColor: "#2B5FA8",
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: darkMode ? 0.4 : 0.12,
+      shadowRadius: 18,
+      elevation: 6,
+      overflow: "hidden",
     },
     dateSummaryContainer: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
-      marginBottom: 25,
+      paddingHorizontal: 20,
+      marginBottom: 18,
+    },
+    dateLeft: {
+      flexDirection: "row",
+      alignItems: "center",
     },
     dateText: {
       fontSize: 20,
-      fontWeight: "700",
-      color: theme.text,
-      marginBottom: 5,
+      fontWeight: "800",
+      color: darkMode ? "#F2F5FA" : "#0F1B3D",
     },
     taskCountText: {
       fontSize: 14,
-      color: theme.textSecondary,
+      color: darkMode ? "#A8B3C7" : "#3A4560",
+      marginTop: 2,
     },
     calendarButtonLarge: {
-      width: 40,
-      height: 40,
-      borderRadius: 25,
-      backgroundColor: theme.success,
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: darkMode ? "#143626" : "#D5F3DC",
       justifyContent: "center",
       alignItems: "center",
     },
-    calendarContainer: {
-      marginBottom: 20,
-    },
     calendarScroll: {
-      paddingVertical: 5,
+      flexGrow: 0,
+      marginBottom: 14,
+    },
+    calendarScrollContent: {
+      paddingHorizontal: 16,
+      paddingVertical: 6,
     },
     dayBlock: {
-      paddingVertical: 5,
-      paddingHorizontal: 12,
+      width: 46,
+      height: 60,
       marginRight: 8,
-      backgroundColor: theme.card,
-      borderRadius: 10,
-      height: 45,
+      backgroundColor: darkMode ? "#1B2438" : "#F1F3F7",
+      borderRadius: 14,
       justifyContent: "center",
       alignItems: "center",
       borderWidth: 1,
-      borderColor: theme.border,
+      borderColor: darkMode ? "#2A3550" : "#E6E9EF",
     },
     selectedDayBlock: {
-      backgroundColor: theme.primary,
-      borderColor: theme.primary,
+      backgroundColor: "#0B6CF0",
+      borderColor: "#0B6CF0",
+      shadowColor: "#0B6CF0",
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.35,
+      shadowRadius: 8,
+      elevation: 5,
     },
     dayLabel: {
       fontSize: 12,
       fontWeight: "500",
-      textAlign: "center",
-      color: theme.textSecondary,
+      color: darkMode ? "#A8B3C7" : "#3A4560",
     },
     dayNumber: {
-      fontSize: 14,
+      fontSize: 17,
       fontWeight: "700",
-      textAlign: "center",
-      color: theme.text,
-      marginTop: 0,
+      color: darkMode ? "#F2F5FA" : "#0F1B3D",
+      marginTop: 2,
     },
     selectedDayLabel: {
       color: "#fff",
@@ -1455,92 +1611,82 @@ const createStyles = (theme) =>
       color: "#fff",
     },
     selectedDayDot: {
-      width: 3,
-      height: 3,
-      borderRadius: 1.5,
+      width: 5,
+      height: 5,
+      borderRadius: 3,
       backgroundColor: "#fff",
+      marginTop: 3,
+    },
+    // ---- task list ----
+    taskScroll: {
+      flex: 1,
+    },
+    taskScrollContent: {
+      paddingHorizontal: 12,
+      paddingTop: 8,
+      paddingBottom: 90,
+    },
+    taskCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      height: 56,
+      marginBottom: 10,
+      borderRadius: 15,
+      borderLeftWidth: 4,
+      overflow: "hidden",
+      shadowColor: "#2B5FA8",
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: darkMode ? 0.3 : 0.1,
+      shadowRadius: 10,
+      elevation: 3,
+    },
+    timeBlock: {
+      width: 80,
+      height: "100%",
+      justifyContent: "center",
+      alignItems: "center",
+      borderTopRightRadius: 16,
+      borderBottomRightRadius: 16,
+    },
+    timeBlockText: {
+      fontSize: 11.5,
+      fontWeight: "500",
       marginTop: 2,
     },
-    timelineScrollView: {
-      flex: 1,
-      paddingHorizontal: 2,
-    },
-    timelineContent: {
-      position: "relative",
-      paddingLeft: 65,
-    },
-    timelineLine: {
-      position: "absolute",
-      left: 0,
-      top: 0,
-      bottom: 0,
-      width: 2,
-      backgroundColor: theme.border,
-    },
-    timelineRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      marginBottom: 20,
-    },
-    timeSlotText: {
-      position: "absolute",
-      left: -70,
-      width: 65,
-      textAlign: "right",
-      fontSize: 13,
-      color: theme.textSecondary,
-      top: 0,
-    },
-    timelineDot: {
-      width: 10,
-      height: 10,
-      borderRadius: 5,
-      backgroundColor: theme.warning,
-      position: "absolute",
-      left: 21,
-      top: 0,
-    },
-    taskTimelineItem: {
-      flexDirection: "row",
-      alignItems: "center",
-      paddingVertical: 10,
-      paddingHorizontal: 15,
-      borderRadius: 25,
-      marginBottom: 0,
-      minHeight: 50,
-      flex: 1,
-    },
-    taskTimelineAvatar: {
-      width: 30,
-      height: 30,
-      borderRadius: 15,
-      marginRight: 10,
-      backgroundColor: theme.border,
-    },
-    taskTimelineAvatarsGroup: {
-      flexDirection: "row",
-      marginRight: 10,
-    },
-    taskTimelineAvatarSmall: {
+    checkCircle: {
       width: 24,
       height: 24,
       borderRadius: 12,
-      marginLeft: -8,
-      borderWidth: 1,
-      borderColor: "#fff",
-      backgroundColor: theme.border,
-    },
-    taskInfoContainer: {
-      flex: 1,
-      flexDirection: "row",
-      justifyContent: "space-between",
+      borderWidth: 2,
+      marginLeft: 10,
+      justifyContent: "center",
       alignItems: "center",
     },
-    taskTimelineTitle: {
-      fontSize: 16,
+    taskTextWrap: {
+      flex: 1,
+      marginLeft: 12,
+      marginRight: 8,
+    },
+    taskTitle: {
+      fontSize: 15,
       fontWeight: "500",
-      color: "#fff",
-      flexShrink: 1,
+    },
+    taskTitleDone: {
+      fontWeight: "600",
+    },
+    taskDate: {
+      fontSize: 12,
+      marginTop: 1,
+    },
+    priorityPill: {
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      borderRadius: 14,
+      marginRight: 10,
+    },
+    priorityPillText: {
+      fontSize: 11.5,
+      fontWeight: "700",
     },
     priorityBadge: {
       paddingHorizontal: 8,
@@ -1553,29 +1699,33 @@ const createStyles = (theme) =>
       fontWeight: "bold",
       color: "#fff",
     },
+    emptyWrap: {
+      alignItems: "center",
+      marginTop: 40,
+    },
     noTasksText: {
       fontSize: 16,
       color: theme.textSecondary,
       textAlign: "center",
-      marginTop: 50,
+      marginTop: 8,
       alignSelf: "center",
       width: "100%",
       paddingHorizontal: 30,
     },
     fab: {
       position: "absolute",
-      bottom: 30,
-      right: 30,
-      width: 60,
-      height: 60,
-      borderRadius: 30,
-      backgroundColor: theme.primary,
+      bottom: 22,
+      right: 20,
+      width: 54,
+      height: 54,
+      borderRadius: 27,
+      backgroundColor: "#1FA347",
       justifyContent: "center",
       alignItems: "center",
-      shadowColor: theme.shadow,
-      shadowOffset: { width: 0, height: 5 },
-      shadowOpacity: 0.3,
-      shadowRadius: 8,
+      shadowColor: "#1FA347",
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.4,
+      shadowRadius: 12,
       elevation: 8,
     },
     modalContainer: {
@@ -1822,31 +1972,43 @@ const createStyles = (theme) =>
       flexDirection: "row",
       justifyContent: "space-around",
       alignItems: "center",
-      height: 70,
-      backgroundColor: theme.surface,
+      height: 64,
+      backgroundColor: darkMode ? "#141C2E" : "#FFFFFF",
       position: "absolute",
-      bottom: 5,
-      left: 0,
-      right: 0,
-      borderRadius: 25,
-      marginHorizontal: 10,
-      shadowColor: theme.shadow,
-      shadowOffset: { width: 0, height: -2 },
-      shadowOpacity: 0.05,
-      shadowRadius: 4,
-      elevation: 5,
-      paddingBottom: Platform.OS === "ios" ? 10 : 0,
-      borderWidth: 1,
-      borderColor: theme.border,
+      bottom: Platform.OS === "ios" ? 22 : 14,
+      left: 12,
+      right: 12,
+      borderRadius: 24,
+      shadowColor: "#2B5FA8",
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: darkMode ? 0.4 : 0.14,
+      shadowRadius: 16,
+      elevation: 10,
+      overflow: "hidden",
     },
     navItem: {
+      flex: 1,
+      height: "100%",
       alignItems: "center",
-      padding: 5,
+      justifyContent: "center",
+      paddingTop: 6,
     },
     navText: {
       fontSize: 12,
-      marginTop: 4,
+      marginTop: 3,
       fontWeight: "500",
+    },
+    navTextActive: {
+      fontWeight: "700",
+    },
+    navIndicator: {
+      position: "absolute",
+      bottom: 0,
+      width: 40,
+      height: 4,
+      borderTopLeftRadius: 4,
+      borderTopRightRadius: 4,
+      backgroundColor: "transparent",
     },
     taskActionsContainer: {
       flexDirection: "row",
