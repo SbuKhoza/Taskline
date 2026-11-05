@@ -1,7 +1,8 @@
 "use client"
+import "./global.css"
 import { useState, useEffect } from "react"
 import { NavigationContainer } from "@react-navigation/native"
-import { createNativeStackNavigator } from "@react-navigation/native-stack"
+import { createStackNavigator } from "@react-navigation/stack"
 import { onAuthStateChanged } from "firebase/auth"
 import { auth } from "./firebase/config"
 import MainScreen from "./screens/MainScreen"
@@ -11,10 +12,10 @@ import Settings from "./screens/Settings"
 import Privacy from "./screens/Privacy" // Import Privacy screen
 import Terms from "./screens/Terms" // Import Terms screen
 import Splash from "./screens/Splash" // Import your Splash component
-import { View, ActivityIndicator, StyleSheet, Text, StatusBar } from "react-native"
+import { View, ActivityIndicator, Text, StatusBar } from "react-native"
 import AsyncStorage from "@react-native-async-storage/async-storage"
 
-const Stack = createNativeStackNavigator()
+const Stack = createStackNavigator()
 
 // Theme definitions
 export const lightTheme = {
@@ -113,10 +114,10 @@ const App = () => {
   // Show loading screen while auth and theme are loading
   if (loading || themeLoading) {
     return (
-      <View style={[styles.loadingContainer, { backgroundColor: currentTheme.background }]}>
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: currentTheme.background }}>
         <StatusBar barStyle={currentTheme.statusBar} backgroundColor={currentTheme.background} />
         <ActivityIndicator size="large" color={currentTheme.primary} />
-        <Text style={[styles.loadingText, { color: currentTheme.text }]}>Loading app...</Text>
+        <Text className="mt-3 text-base font-medium" style={{ color: currentTheme.text }}>Loading app...</Text>
       </View>
     )
   }
@@ -165,18 +166,5 @@ const App = () => {
     </>
   )
 }
-
-const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  loadingText: {
-    marginTop: 10,
-    fontSize: 16,
-    fontWeight: "500",
-  },
-})
 
 export default App

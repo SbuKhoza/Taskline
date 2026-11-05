@@ -4,20 +4,38 @@ import {
   Text,
   TextInput,
   FlatList,
-  TouchableOpacity,
   Modal,
-  StyleSheet,
   Switch,
   ScrollView,
   Platform,
   Image,
+  Pressable,
+  KeyboardAvoidingView,
   ActivityIndicator,
   RefreshControl,
   Alert,
   StatusBar,
+  AppState,
   useWindowDimensions,
 } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
+import {
+  syncTaskReminders,
+  requestPermission,
+  getPermissionStatus,
+  hasExactAlarmPermission,
+  requestExactAlarmPermission,
+  getUpcomingReminders,
+  openSystemSettings,
+  sendTestNotification,
+  listenForNotificationTaps,
+  snoozeReminder,
+  cancelSnooze,
+  ACTION_DONE,
+  ACTION_SNOOZE,
+  SNOOZE_MINUTES,
+} from "../utils/notifications"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
 import DateTimePickerModal from "react-native-modal-datetime-picker"
 import { useState, useEffect, useCallback } from "react"
 import { db, auth } from "../firebase/config"
@@ -29,6 +47,7 @@ import {
   onSnapshot,
   doc,
   updateDoc,
+  arrayUnion,
   serverTimestamp,
   getDoc,
   deleteDoc,
@@ -44,30 +63,20 @@ const avatars = {
 }
 
 
-const HERO_HEIGHT = Platform.OS === "android" ? 180 : 200
+// ---- Tone (colour) mapping for task rows ----
+// Class names are written out in full so Tailwind can detect them.
+const TONES = {
+  green: { bar: "border-l-green-500", tint: "bg-green-500/15", pill: "bg-green-500/20", textL: "text-green-700", textD: "text-green-300", icon: "#16A34A" },
+  blue: { bar: "border-l-blue-500", tint: "bg-blue-500/15", pill: "bg-blue-500/15", textL: "text-blue-700", textD: "text-blue-300", icon: "#2563EB" },
+  red: { bar: "border-l-red-500", tint: "bg-red-500/15", pill: "bg-red-500/15", textL: "text-red-700", textD: "text-red-300", icon: "#DC2626" },
+  amber: { bar: "border-l-amber-500", tint: "bg-amber-500/15", pill: "bg-amber-500/20", textL: "text-amber-700", textD: "text-amber-300", icon: "#D97706" },
+}
 
-// ---- Home screen visual palette (matches the new design) ----
-const getUiPalette = (dark) => ({
-  pageBg: dark ? "#0B1220" : "#EEF4FC",
-  cardBg: dark ? "#141C2E" : "#FFFFFF",
-  rowBg: dark ? "#1B2438" : "#FFFFFF",
-  chipBg: dark ? "#1B2438" : "#F1F3F7",
-  chipBorder: dark ? "#2A3550" : "#E6E9EF",
-  title: dark ? "#F2F5FA" : "#0F1B3D",
-  subtitle: dark ? "#A8B3C7" : "#3A4560",
-  muted: dark ? "#8693AB" : "#6B7488",
-  checkBorder: dark ? "#4A566E" : "#C9CDD4",
-  blue: "#0B6CF0",
-  blueDark: "#0A55C8",
-  green: "#22B14C",
-  greenDark: "#1E9E45",
-  tones: {
-    green: { accent: "#22C55E", tint: dark ? "#143626" : "#E4F7E8", text: "#1F9D45", pill: dark ? "#143626" : "#D5F3DC" },
-    blue: { accent: "#1E88F0", tint: dark ? "#122B4A" : "#E4F1FD", text: "#1368C9", pill: dark ? "#122B4A" : "#D3E8FB" },
-    red: { accent: "#EF4444", tint: dark ? "#47181C" : "#FDE4E4", text: "#C81E1E", pill: dark ? "#47181C" : "#FBD0D0" },
-    amber: { accent: "#F59E0B", tint: dark ? "#47340F" : "#FEF1D6", text: "#B26A00", pill: dark ? "#47340F" : "#FDE7B8" },
-  },
-})
+const PRIORITIES = [
+  { key: "Normal", selected: "border-blue-600 bg-blue-600" },
+  { key: "Important", selected: "border-amber-500 bg-amber-500" },
+  { key: "Very Important", selected: "border-red-500 bg-red-500" },
+]
 
 // completed -> green, otherwise by priority
 const getTaskTone = (task) => {
@@ -82,6 +91,97 @@ const formatTime = (d) =>
   new Date(d)
     .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
     .toLowerCase()
+
+// ---- Reusable pieces ----
+const TaskRow = ({ task, darkMode, onPress, onToggle, showDate }) => {
+  const c = (l, d) => (darkMode ? d : l)
+  const tone = TONES[getTaskTone(task)]
+  const overdue = !task.completed && new Date(task.instanceDate) < new Date()
+  const subtitle = overdue ? "Overdue" : showDate ? new Date(task.instanceDate).toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }) : task.description
+
+  return (
+    <View className="mb-3 rounded-2xl shadow-md shadow-blue-900/10" style={{ backgroundColor: darkMode ? "#1B2438" : "#fff" }}>
+      <Pressable
+        onPress={onPress}
+        className={`h-16 flex-row items-center overflow-hidden rounded-2xl border-l-4 active:opacity-80 ${tone.bar}`}
+      >
+        <View className={`h-full w-[80px] items-center justify-center rounded-r-2xl ${tone.tint}`}>
+          <Ionicons name="time-outline" size={16} color={tone.icon} />
+          <Text className={`mt-0.5 text-[11px] font-semibold ${c("text-ink", "text-slate-100")}`}>
+            {formatTime(task.instanceDate)}
+          </Text>
+        </View>
+
+        <Pressable
+          onPress={onToggle}
+          hitSlop={12}
+          className={`ml-3 size-[24px] items-center justify-center rounded-full border-2 ${
+            task.completed ? "border-green-500 bg-green-500" : c("border-slate-300", "border-slate-600")
+          }`}
+        >
+          {task.completed && <Ionicons name="checkmark" size={15} color="#fff" />}
+        </Pressable>
+
+        <View className="mx-3 min-w-0 flex-1">
+          <Text
+            numberOfLines={1}
+            className={`text-[15px] font-semibold ${c("text-ink", "text-slate-50")} ${task.completed ? "line-through opacity-60" : ""}`}
+          >
+            {task.title}
+          </Text>
+          {!!subtitle && (
+            <Text
+              numberOfLines={1}
+              className={`mt-0.5 text-xs ${overdue ? "font-semibold text-red-500" : c("text-slate-500", "text-slate-400")}`}
+            >
+              {subtitle}
+            </Text>
+          )}
+        </View>
+
+        <View className={`mr-3 rounded-full px-2.5 py-1 ${tone.pill}`}>
+          <Text numberOfLines={1} className={`text-[11px] font-bold ${c(tone.textL, tone.textD)}`}>
+            {task.priority}
+          </Text>
+        </View>
+      </Pressable>
+    </View>
+  )
+}
+
+// Bottom sheet used by every modal
+const Sheet = ({ visible, onClose, darkMode, children }) => {
+  const { height } = useWindowDimensions()
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
+      <View className="flex-1 justify-end bg-black/50">
+        <Pressable className="absolute inset-0" onPress={onClose} />
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          <View
+            style={{ maxHeight: height * 0.9 }}
+            className={`rounded-t-[28px] px-5 pb-8 pt-3 ${darkMode ? "bg-night-card" : "bg-white"}`}
+          >
+            <View className={`mx-auto mb-3 h-1.5 w-10 rounded-full ${darkMode ? "bg-slate-600" : "bg-slate-300"}`} />
+            {children}
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+  )
+}
+
+const SheetHeader = ({ title, onClose, darkMode }) => (
+  <View className="mb-4 flex-row items-center justify-between">
+    <Text className={`text-xl font-bold ${darkMode ? "text-slate-50" : "text-ink"}`}>{title}</Text>
+    <Pressable
+      onPress={onClose}
+      hitSlop={10}
+      className={`size-9 items-center justify-center rounded-full ${darkMode ? "bg-night-row" : "bg-slate-100"}`}
+    >
+      <Ionicons name="close" size={20} color={darkMode ? "#CBD5E1" : "#475569"} />
+    </Pressable>
+  </View>
+)
 
 const MainScreen = ({ user, theme, darkMode }) => {
   const navigation = useNavigation()
@@ -114,16 +214,60 @@ const MainScreen = ({ user, theme, darkMode }) => {
     recurringTime: new Date(),
   })
   const [showMoreModal, setShowMoreModal] = useState(false)
+  const [showRemindersModal, setShowRemindersModal] = useState(false)
+  const [toast, setToast] = useState(null)
+  const showToast = useCallback((msg) => {
+    setToast(msg)
+    setTimeout(() => setToast(null), 3000)
+  }, [])
+  const [notifState, setNotifState] = useState({ granted: true, canAskAgain: true, exact: true })
   const [refreshing, setRefreshing] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
 
-  // Create dynamic styles based on theme
-  const styles = createStyles(theme, darkMode)
 
-  const { width: screenWidth } = useWindowDimensions()
-  const ui = getUiPalette(darkMode)
+  const insets = useSafeAreaInsets()
+  const c = (l, d) => (darkMode ? d : l)
 
   const isFocused = useIsFocused()
+
+  // ----- Notifications: permission, taps, and top-up when the app comes back to the foreground -----
+  const refreshNotifState = useCallback(async () => {
+    const [p, exact] = await Promise.all([getPermissionStatus(), hasExactAlarmPermission()])
+    setNotifState({ granted: p.granted, canAskAgain: p.canAskAgain, exact })
+  }, [])
+
+  useEffect(() => {
+    requestPermission().finally(refreshNotifState)
+    const stopTaps = listenForNotificationTaps(async (d, action) => {
+      setSelectedDate(new Date(d.date))
+      setActiveTab("Home")
+      try {
+        if (action === ACTION_DONE) {
+          const ref = doc(db, "tasks", d.originalTaskId)
+          if (d.recurring) {
+            await updateDoc(ref, { completedInstances: arrayUnion(new Date(d.date).toDateString()) })
+          } else {
+            await updateDoc(ref, { completed: true })
+          }
+          await cancelSnooze(d.taskId)
+          showToast(`Marked "${d.title}" as done`)
+        } else if (action === ACTION_SNOOZE) {
+          await snoozeReminder(d)
+          showToast(`Snoozed "${d.title}" for ${SNOOZE_MINUTES} minutes`)
+        }
+      } catch (e) {
+        console.warn("Notification action failed:", e?.message)
+        showToast("Couldn't complete that action")
+      }
+    })
+    const appStateSub = AppState.addEventListener("change", (state) => {
+      if (state === "active") refreshNotifState()
+    })
+    return () => {
+      stopTaps()
+      appStateSub.remove()
+    }
+  }, [])
 
   // Effect to fetch username from Firestore
   useEffect(() => {
@@ -498,6 +642,7 @@ const MainScreen = ({ user, theme, darkMode }) => {
   // Quick toggle from the checkbox on a task row (no alert / modal)
   const toggleTaskCompleteQuick = async (task) => {
     if (!user) return
+    if (!task.completed) cancelSnooze(task.id)
     const originalTaskId = task.originalTaskId || task.id
     const taskRef = doc(db, "tasks", originalTaskId)
     try {
@@ -675,17 +820,6 @@ const MainScreen = ({ user, theme, darkMode }) => {
     }
   }
 
-  const getPriorityColor = (priority) => {
-    switch (priority) {
-      case "Very Important":
-        return theme.danger
-      case "Important":
-        return theme.warning
-      case "Normal":
-      default:
-        return theme.success
-    }
-  }
 
   const generateHours = () => {
     return Array.from({ length: 12 }, (_, i) => (i === 0 ? 12 : i))
@@ -792,1486 +926,748 @@ const MainScreen = ({ user, theme, darkMode }) => {
     }
   }
 
-  const pendingToday = tasksForSelectedDate.filter((t) => !t.completed).length
+  // ----- schedule local reminders for every pending, future task -----
+  const nowMs = Date.now()
+  const reminderTasks = allExpandedTasks
+    .filter((t) => {
+      const o = tasks.find((x) => x.id === t.originalTaskId || x.id === t.id)
+      return o && !o.deleted && !o.archived && !t.completed && new Date(t.instanceDate).getTime() > nowMs
+    })
+    .map((t) => ({
+      id: t.id,
+      originalTaskId: t.originalTaskId || t.id,
+      recurring: !!t.recurring,
+      title: t.title,
+      priority: t.priority,
+      date: new Date(t.instanceDate).getTime(),
+    }))
+    .sort((a, b) => a.date - b.date)
+    .slice(0, 80)
+  const reminderSignature = reminderTasks.map((t) => `${t.id}|${t.date}|${t.title}|${t.priority}`).join(";")
 
-  const renderTaskRow = (task, showDate = false) => {
-    const tone = ui.tones[getTaskTone(task)]
-    return (
-      <TouchableOpacity
-        key={task.id}
-        activeOpacity={0.85}
-        onPress={() => handleEdit(task)}
-        style={[styles.taskCard, { backgroundColor: ui.rowBg, borderLeftColor: tone.accent }]}
-      >
-        <View style={[styles.timeBlock, { backgroundColor: tone.tint }]}>
-          <Ionicons name="time-outline" size={18} color={tone.text} />
-          <Text style={[styles.timeBlockText, { color: ui.title }]}>{formatTime(task.instanceDate)}</Text>
-        </View>
-        <TouchableOpacity
-          onPress={() => toggleTaskCompleteQuick(task)}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          style={[
-            styles.checkCircle,
-            task.completed
-              ? { backgroundColor: ui.green, borderColor: ui.green }
-              : { borderColor: ui.checkBorder },
-          ]}
-        >
-          {task.completed && <Ionicons name="checkmark" size={16} color="#fff" />}
-        </TouchableOpacity>
-        <View style={styles.taskTextWrap}>
-          <Text
-            numberOfLines={1}
-            style={[styles.taskTitle, { color: ui.title }, task.completed && styles.taskTitleDone]}
-          >
-            {task.title}
-          </Text>
-          {showDate && (
-            <Text style={[styles.taskDate, { color: ui.muted }]}>
-              {new Date(task.instanceDate).toLocaleDateString("en-ZA", { day: "numeric", month: "short" })}
-            </Text>
-          )}
-        </View>
-        <View style={[styles.priorityPill, { backgroundColor: tone.pill }]}>
-          <Text numberOfLines={1} style={[styles.priorityPillText, { color: tone.text }]}>
-            {task.priority}
-          </Text>
-        </View>
-      </TouchableOpacity>
-    )
-  }
+  useEffect(() => {
+    syncTaskReminders(reminderTasks)
+  }, [reminderSignature])
+
+  // ----- derived values for the UI -----
+  const doneToday = tasksForSelectedDate.filter((t) => t.completed).length
+  const totalToday = tasksForSelectedDate.length
+  const progress = totalToday === 0 ? 0 : Math.round((doneToday / totalToday) * 100)
+  const pendingToday = totalToday - doneToday
+  const isSelectedToday = selectedDate.toDateString() === new Date().toDateString()
+
+  const taskDays = new Set(
+    allExpandedTasks
+      .filter((t) => {
+        const o = tasks.find((x) => x.id === t.originalTaskId || x.id === t.id)
+        return o && !o.deleted && !o.archived
+      })
+      .map((t) => new Date(t.instanceDate).toDateString()),
+  )
+
+  const tabCounts = { Upcoming: upcomingTasks.length, Complete: completedTasks.length, Archive: archivedTasks.length, Deleted: deletedTasks.length }
+  const heroHeight = insets.top + 150
+  const navBottom = Math.max(insets.bottom, 10) + 8
+  const placeholderColor = darkMode ? "#64748B" : "#94A3B8"
+  const iconMuted = darkMode ? "#94A3B8" : "#64748B"
+  const field = c("border-slate-200 bg-slate-50", "border-slate-700 bg-night-row")
+  const textMain = c("text-ink", "text-slate-50")
+  const textMuted = c("text-slate-500", "text-slate-400")
+  const originalOfEditing = editingTask ? tasks.find((t) => t.id === editingTask.originalTaskId || t.id === editingTask.id) : null
+
+  const renderRow = (task, showDate = false) => (
+    <TaskRow
+      key={task.id}
+      task={task}
+      darkMode={darkMode}
+      showDate={showDate}
+      onPress={() => handleEdit(task)}
+      onToggle={() => toggleTaskCompleteQuick(task)}
+    />
+  )
 
   return (
-    <View style={styles.container}>
+    <View className={`flex-1 ${c("bg-page", "bg-night")}`}>
       {isFocused && <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />}
-      {/* Hero header */}
-      <View style={[styles.hero, { height: HERO_HEIGHT }]}>
-        <View style={styles.heroGlow} />
+
+      {/* ================= Hero header ================= */}
+      <View style={{ height: heroHeight }} className="w-full overflow-hidden bg-hero">
+        <View className="absolute -inset-x-16 -bottom-10 h-36 rounded-full bg-sky-300/30" />
         <Image
           source={require("../assets/header-skyline.png")}
           resizeMode="cover"
-          style={[styles.heroImage, { width: screenWidth * 0.78, height: HERO_HEIGHT - 20 }]}
+          className="absolute right-0 top-2 h-[88%] w-4/5"
         />
-        <View style={styles.heroTextWrap}>
-          <Text style={styles.greetingText}>{getGreeting()}</Text>
-          {user && fetchedUsername ? <Text style={styles.usernameText}>{fetchedUsername}</Text> : null}
-          <View style={styles.greetingUnderline} />
+        <View className="absolute left-5 right-20" style={{ top: insets.top + 14 }}>
+          <Text className="text-[26px] font-extrabold text-white">{getGreeting()}</Text>
+          {user && fetchedUsername ? <Text className="mt-0.5 text-lg text-white/90">{fetchedUsername}</Text> : null}
+          <View className="mt-2 h-1 w-14 rounded-full bg-green-400" />
         </View>
-        <TouchableOpacity
-          style={styles.bellButton}
-          onPress={() => console.log("Notifications clicked")}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        <Pressable
+          onPress={() => {
+            refreshNotifState()
+            setShowRemindersModal(true)
+          }}
+          hitSlop={10}
+          className="absolute right-5 size-10 items-center justify-center rounded-full bg-white/15 active:bg-white/25"
+          style={{ top: insets.top + 12 }}
         >
-          <Ionicons name="notifications-outline" size={24} color="#fff" />
-          {pendingToday > 0 && <View style={styles.bellDot} />}
-        </TouchableOpacity>
-        <View style={styles.heroWaveGreen} />
-        <View style={[styles.heroWaveCover, { backgroundColor: ui.pageBg }]} />
+          <Ionicons name="notifications-outline" size={22} color="#fff" />
+          {pendingToday > 0 && <View className="absolute right-2 top-2 size-2.5 rounded-full border border-hero bg-red-500" />}
+        </Pressable>
+        <View className="absolute -inset-x-20 -bottom-16 h-24 rotate-[-2deg] rounded-full bg-green-500" />
+        <View className={`absolute -inset-x-16 -bottom-20 h-24 rounded-full ${c("bg-page", "bg-night")}`} />
       </View>
 
       {loadingTasks && refreshing ? (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color={theme.primary} />
-          <Text style={styles.loadingText}>Loading tasks...</Text>
+        <View className="flex-1 items-center justify-center">
+          <ActivityIndicator size="large" color="#0B6CF0" />
+          <Text className={`mt-3 text-base ${textMuted}`}>Loading tasks...</Text>
         </View>
       ) : (
-        <View style={styles.mainCard}>
-          {/* Date and Task Count */}
-          <View style={styles.dateSummaryContainer}>
-            <View style={styles.dateLeft}>
-              <Ionicons name="calendar-outline" size={32} color={ui.blue} />
-              <View style={{ marginLeft: 12 }}>
-                <Text style={styles.dateText}>
-                  {selectedDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })}
-                </Text>
-                <Text style={styles.taskCountText}>
-                  {tasksForSelectedDate.length} {tasksForSelectedDate.length === 1 ? "task" : "tasks"}{" "}
-                  {selectedDate.toDateString() === new Date().toDateString() ? "today" : "this day"}
-                </Text>
+        <View
+          style={{ marginBottom: navBottom + 64 + 12 }}
+          className={`-mt-6 mx-3 flex-1 rounded-3xl shadow-lg shadow-blue-900/15 ${c("bg-white", "bg-night-card")}`}
+        >
+          <View className="flex-1 overflow-hidden rounded-3xl pt-5">
+            {/* Date + count */}
+            <View className="mb-4 flex-row items-center justify-between px-5">
+              <View className="flex-row items-center">
+                <View className="size-12 items-center justify-center rounded-2xl bg-brand/10">
+                  <Ionicons name="calendar-outline" size={26} color="#0B6CF0" />
+                </View>
+                <View className="ml-3">
+                  <Text className={`text-xl font-extrabold ${textMain}`}>
+                    {selectedDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })}
+                  </Text>
+                  <Text className={`text-[13px] ${textMuted}`}>
+                    {totalToday} {totalToday === 1 ? "task" : "tasks"} {isSelectedToday ? "today" : "this day"}
+                  </Text>
+                </View>
               </View>
-            </View>
-            <TouchableOpacity style={styles.calendarButtonLarge} onPress={() => setShowMonthCalendar(true)}>
-              <Ionicons name="calendar" size={20} color={ui.greenDark} />
-            </TouchableOpacity>
-          </View>
-
-          {/* Weekly Calendar */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.calendarScroll}
-            contentContainerStyle={styles.calendarScrollContent}
-          >
-            {daysOfWeek.map((d, i) => (
-              <TouchableOpacity
-                key={i}
-                activeOpacity={0.85}
-                style={[styles.dayBlock, d.isSelected && styles.selectedDayBlock]}
-                onPress={() => setSelectedDate(d.date)}
+              <Pressable
+                onPress={() => setShowMonthCalendar(true)}
+                className="size-11 items-center justify-center rounded-full bg-green-500/15 active:opacity-70"
               >
-                <Text style={[styles.dayLabel, d.isSelected && styles.selectedDayLabel]}>
-                  {d.label.split(" ")[0]}
-                </Text>
-                <Text style={[styles.dayNumber, d.isSelected && styles.selectedDayNumber]}>
-                  {d.label.split(" ")[1]}
-                </Text>
-                {d.isSelected && <View style={styles.selectedDayDot} />}
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+                <Ionicons name="calendar" size={20} color="#16A34A" />
+              </Pressable>
+            </View>
 
-          {/* Task list */}
-          <ScrollView
-            style={styles.taskScroll}
-            contentContainerStyle={styles.taskScrollContent}
-            showsVerticalScrollIndicator={false}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.primary} />}
-          >
-            {tasksForSelectedDate.map((task) => renderTaskRow(task))}
-            {tasksForSelectedDate.length === 0 && (
-              <View style={styles.emptyWrap}>
-                <Ionicons name="checkmark-done-circle-outline" size={44} color={ui.checkBorder} />
-                <Text style={styles.noTasksText}>No tasks for this day.</Text>
+            {/* Progress */}
+            {totalToday > 0 && (
+              <View className="mb-4 px-5">
+                <View className="mb-1.5 flex-row items-center justify-between">
+                  <Text className={`text-xs font-medium ${textMuted}`}>
+                    {doneToday} of {totalToday} completed
+                  </Text>
+                  <Text className="text-xs font-bold text-green-600">{progress}%</Text>
+                </View>
+                <View className={`h-1.5 overflow-hidden rounded-full ${c("bg-slate-100", "bg-night-row")}`}>
+                  <View className="h-full rounded-full bg-green-500" style={{ width: `${progress}%` }} />
+                </View>
               </View>
             )}
-          </ScrollView>
 
-          {/* Add Task Button (Floating) */}
-          <TouchableOpacity style={styles.fab} onPress={openAddModal} activeOpacity={0.9}>
-            <Ionicons name="add" size={30} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Task Modal (Add/Edit) */}
-      <Modal visible={showModal} transparent animationType="fade">
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{editingTask ? "Edit Task" : "Add New Task"}</Text>
-              <TouchableOpacity onPress={closeModal}>
-                <Ionicons name="close" size={24} color={theme.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.modalForm}>
-              <TextInput
-                placeholder="Task title"
-                placeholderTextColor={theme.textTertiary}
-                value={form.title}
-                onChangeText={(title) => setForm((prev) => ({ ...prev, title }))}
-                style={styles.input}
-              />
-              <TextInput
-                placeholder="Description (optional)"
-                placeholderTextColor={theme.textTertiary}
-                value={form.description}
-                onChangeText={(description) => setForm((prev) => ({ ...prev, description }))}
-                style={[styles.input, styles.textArea]}
-                multiline
-                numberOfLines={3}
-              />
-              <Text style={styles.label}>Due Date</Text>
-              <TouchableOpacity
-                onPress={() => setForm((prev) => ({ ...prev, showDatePicker: true }))}
-                style={[styles.datePickerTrigger]}
-              >
-                <Text style={styles.datePickerTriggerText}>{form.date.toLocaleDateString()}</Text>
-                <Ionicons name="chevron-down" size={18} color={theme.textSecondary} />
-              </TouchableOpacity>
-              <DateTimePickerModal
-                isVisible={form.showDatePicker}
-                mode="date"
-                date={form.date}
-                minimumDate={new Date()}
-                onConfirm={(date) => setForm((prev) => ({ ...prev, date, showDatePicker: false }))}
-                onCancel={() => setForm((prev) => ({ ...prev, showDatePicker: false }))}
-                themeVariant={darkMode ? "dark" : "light"}
-              />
-              <Text style={styles.label}>Due Time</Text>
-              <TouchableOpacity onPress={() => openCustomTimePicker("mainDate")} style={styles.timePickerTrigger}>
-                <Text style={styles.timePickerTriggerText}>
-                  {form.date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </Text>
-                <Ionicons name="chevron-down" size={18} color={theme.textSecondary} />
-              </TouchableOpacity>
-              <Text style={styles.label}>Priority</Text>
-              <View style={styles.pickerWrapper}>
-                {["Normal", "Important", "Very Important"].map((p) => (
-                  <TouchableOpacity
-                    key={p}
-                    style={[styles.priorityButton, form.priority === p && styles.prioritySelected]}
-                    onPress={() => setForm((prev) => ({ ...prev, priority: p }))}
+            {/* Week strip */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              className="mb-3 grow-0"
+              contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 6, gap: 8 }}
+            >
+              {daysOfWeek.map((d, i) => {
+                const isToday = d.date.toDateString() === new Date().toDateString()
+                const has = taskDays.has(d.date.toDateString())
+                return (
+                  <Pressable
+                    key={i}
+                    onPress={() => setSelectedDate(d.date)}
+                    className={`h-16 w-12 items-center justify-center rounded-2xl border active:opacity-80 ${
+                      d.isSelected
+                        ? "border-brand bg-brand shadow-md shadow-blue-500/40"
+                        : c("border-slate-200 bg-slate-100", "border-slate-700 bg-night-row")
+                    }`}
                   >
-                    <Text style={[styles.priorityButtonText, form.priority === p && styles.priorityButtonTextSelected]}>
-                      {p}
+                    <Text
+                      className={`text-xs font-medium ${
+                        d.isSelected ? "text-white/90" : isToday ? "text-brand" : textMuted
+                      }`}
+                    >
+                      {d.label.split(" ")[0]}
                     </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <View style={styles.switchContainer}>
-                <Text style={styles.switchLabel}>Recurring Task?</Text>
-                <Switch
-                  value={form.recurring}
-                  onValueChange={(val) => setForm((prev) => ({ ...prev, recurring: val }))}
-                  trackColor={{ false: theme.border, true: theme.primary }}
-                  thumbColor={form.recurring ? "#fff" : "#f4f3f4"}
-                />
-              </View>
-              {form.recurring && (
-                <>
-                  <Text style={styles.label}>Frequency</Text>
-                  <View style={styles.pickerWrapper}>
-                    {["Daily", "Weekly", "Monthly", "Yearly", "Custom"].map((freq) => (
-                      <TouchableOpacity
-                        key={freq}
-                        style={[styles.priorityButton, form.recurringFrequency === freq && styles.prioritySelected]}
-                        onPress={() => setForm((prev) => ({ ...prev, recurringFrequency: freq }))}
-                      >
-                        <Text
-                          style={[
-                            styles.priorityButtonText,
-                            form.recurringFrequency === freq && styles.priorityButtonTextSelected,
-                          ]}
-                        >
-                          {freq}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
+                    <Text className={`text-lg font-bold ${d.isSelected ? "text-white" : textMain}`}>
+                      {d.label.split(" ")[1]}
+                    </Text>
+                    <View
+                      className={`mt-0.5 size-1 rounded-full ${
+                        d.isSelected ? "bg-white" : has ? "bg-brand" : "bg-transparent"
+                      }`}
+                    />
+                  </Pressable>
+                )
+              })}
+            </ScrollView>
+
+            {/* Task list */}
+            <ScrollView
+              className="flex-1"
+              contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 6, paddingBottom: 100 }}
+              showsVerticalScrollIndicator={false}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#0B6CF0" />}
+            >
+              {tasksForSelectedDate.map((task) => renderRow(task))}
+              {totalToday === 0 && (
+                <View className="items-center px-8 pt-8">
+                  <View className="size-20 items-center justify-center rounded-full bg-brand/10">
+                    <Ionicons name="checkmark-done" size={38} color="#0B6CF0" />
                   </View>
-                  {form.recurringFrequency === "Custom" && (
-                    <>
-                      <Text style={styles.label}>Select Days</Text>
-                      <View style={styles.daysSelector}>
-                        {["S", "M", "T", "W", "T", "F", "S"].map((day, index) => (
-                          <TouchableOpacity
-                            key={index}
-                            style={[styles.dayButton, form.recurringDays.includes(index) && styles.dayButtonSelected]}
-                            onPress={() => toggleRecurringDay(index)}
-                          >
-                            <Text
-                              style={[
-                                styles.dayButtonText,
-                                form.recurringDays.includes(index) && styles.dayButtonTextSelected,
-                              ]}
-                            >
-                              {day}
-                            </Text>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                      <Text style={styles.label}>Recurring Time</Text>
-                      <TouchableOpacity
-                        onPress={() => openCustomTimePicker("recurringTime")}
-                        style={styles.timePickerTrigger}
-                      >
-                        <Text style={styles.timePickerTriggerText}>
-                          {form.recurringTime.toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </Text>
-                        <Ionicons name="chevron-down" size={18} color={theme.textSecondary} />
-                      </TouchableOpacity>
-                    </>
-                  )}
-                </>
-              )}
-              {editingTask && (
-                <View style={styles.taskActionsContainer}>
-                  <TouchableOpacity
-                    style={[styles.taskActionButton, styles.completeButton]}
-                    onPress={() => markTaskComplete(editingTask)}
-                  >
-                    <Ionicons
-                      name={editingTask?.completed ? "checkmark-circle" : "checkmark-circle-outline"}
-                      size={20}
-                      color="#fff"
-                    />
-                    <Text style={styles.taskActionButtonText}>
-                      {editingTask?.completed ? "Unmark Complete" : "Mark Complete"}
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.taskActionButton, styles.archiveButton]}
-                    onPress={() => archiveTask(editingTask)}
-                  >
-                    <Ionicons
-                      name={
-                        tasks.find((t) => t.id === editingTask.originalTaskId || t.id === editingTask.id)?.archived
-                          ? "archive"
-                          : "archive-outline"
-                      }
-                      size={20}
-                      color="#fff"
-                    />
-                    <Text style={styles.taskActionButtonText}>
-                      {tasks.find((t) => t.id === editingTask.originalTaskId || t.id === editingTask.id)?.archived
-                        ? "Unarchive"
-                        : "Archive"}
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.taskActionButton, styles.deleteButton]}
-                    onPress={() => deleteTask(editingTask)}
-                  >
-                    <Ionicons
-                      name={
-                        tasks.find((t) => t.id === editingTask.originalTaskId || t.id === editingTask.id)?.deleted
-                          ? "trash"
-                          : "trash-outline"
-                      }
-                      size={20}
-                      color="#fff"
-                    />
-                    <Text style={styles.taskActionButtonText}>
-                      {tasks.find((t) => t.id === editingTask.originalTaskId || t.id === editingTask.id)?.deleted
-                        ? "Undelete"
-                        : "Delete"}
-                    </Text>
-                  </TouchableOpacity>
-                  {editingTask &&
-                    tasks.find((t) => t.id === editingTask.originalTaskId || t.id === editingTask.id)?.deleted && (
-                      <TouchableOpacity
-                        style={[styles.taskActionButton, styles.permanentDeleteButton]}
-                        onPress={() => permanentlyDeleteTask(editingTask)}
-                      >
-                        <Ionicons name="trash-bin" size={20} color="#fff" />
-                        <Text style={styles.taskActionButtonText}>Delete Forever</Text>
-                      </TouchableOpacity>
-                    )}
+                  <Text className={`mt-4 text-lg font-bold ${textMain}`}>Nothing planned</Text>
+                  <Text className={`mt-1 text-center text-sm ${textMuted}`}>
+                    You have no tasks for this day. Enjoy the free time or add something new.
+                  </Text>
+                  <Pressable onPress={openAddModal} className="mt-5 rounded-full bg-brand px-6 py-3 active:opacity-80">
+                    <Text className="font-bold text-white">Add a task</Text>
+                  </Pressable>
                 </View>
               )}
             </ScrollView>
-            <TouchableOpacity onPress={handleSave} style={styles.saveButton}>
-              <Text style={styles.saveButtonText}>{editingTask ? "Update Task" : "Create Task"}</Text>
-            </TouchableOpacity>
+
+            {/* FAB */}
+            <Pressable
+              onPress={openAddModal}
+              className="absolute bottom-5 right-5 size-[54px] items-center justify-center rounded-full bg-green-600 shadow-lg shadow-green-600/50 active:scale-95"
+            >
+              <Ionicons name="add" size={30} color="#fff" />
+            </Pressable>
           </View>
         </View>
-      </Modal>
+      )}
 
-      {/* Custom Time Picker Modal */}
-      <Modal visible={showCustomTimePickerModal} transparent animationType="fade">
-        <View style={styles.modalContainer}>
-          <View style={[styles.customTimePickerContent, { flex: 1 }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Time</Text>
-              <TouchableOpacity onPress={() => setShowCustomTimePickerModal(false)}>
-                <Ionicons name="close" size={24} color={theme.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.timePickerColumns}>
-              <ScrollView style={styles.timePickerColumn}>
-                {generateHours().map((hour) => {
-                  const now = new Date()
-                  const isToday = form.date.toDateString() === now.toDateString()
-                  const currentHour24 = now.getHours()
-                  let displayHour24 = tempSelectedAmPm === "PM" && hour !== 12 ? hour + 12 : hour
-                  if (tempSelectedAmPm === "AM" && hour === 12) displayHour24 = 0
-                  if (currentEditingTimeTarget === "mainDate" && isToday && displayHour24 < currentHour24) {
-                    return null
-                  }
-                  return (
-                    <TouchableOpacity
-                      key={hour}
-                      style={[styles.timePickerItem, tempSelectedHour === hour && styles.timePickerItemSelected]}
-                      onPress={() => setTempSelectedHour(hour)}
-                    >
-                      <Text
-                        style={[
-                          styles.timePickerItemText,
-                          tempSelectedHour === hour && styles.timePickerItemTextSelected,
-                        ]}
-                      >
-                        {hour.toString().padStart(2, "0")}
-                      </Text>
-                    </TouchableOpacity>
-                  )
-                })}
-              </ScrollView>
-              <Text style={styles.timePickerSeparator}>:</Text>
-              <ScrollView style={styles.timePickerColumn}>
-                {generateMinutes().map((minute) => {
-                  const now = new Date()
-                  const isToday = form.date.toDateString() === now.toDateString()
-                  const currentHour24 = now.getHours()
-                  const currentMinute = now.getMinutes()
-                  let selectedHour24 =
-                    tempSelectedAmPm === "PM" && tempSelectedHour !== 12 ? tempSelectedHour + 12 : tempSelectedHour
-                  if (tempSelectedAmPm === "AM" && tempSelectedHour === 12) selectedHour24 = 0
-                  if (
-                    currentEditingTimeTarget === "mainDate" &&
-                    isToday &&
-                    selectedHour24 === currentHour24 &&
-                    minute < currentMinute
-                  ) {
-                    return null
-                  }
-                  return (
-                    <TouchableOpacity
-                      key={minute}
-                      style={[styles.timePickerItem, tempSelectedMinute === minute && styles.timePickerItemSelected]}
-                      onPress={() => setTempSelectedMinute(minute)}
-                    >
-                      <Text
-                        style={[
-                          styles.timePickerItemText,
-                          tempSelectedMinute === minute && styles.timePickerItemTextSelected,
-                        ]}
-                      >
-                        {minute.toString().padStart(2, "0")}
-                      </Text>
-                    </TouchableOpacity>
-                  )
-                })}
-              </ScrollView>
-              <View style={[styles.timePickerAmPmColumn, { flex: 1 }]}>
-                <TouchableOpacity
-                  style={[styles.timePickerItem, tempSelectedAmPm === "AM" && styles.timePickerItemSelected]}
-                  onPress={() => setTempSelectedAmPm("AM")}
-                >
-                  <Text
-                    style={[styles.timePickerItemText, tempSelectedAmPm === "AM" && styles.timePickerItemTextSelected]}
-                  >
-                    AM
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.timePickerItem, tempSelectedAmPm === "PM" && styles.timePickerItemSelected]}
-                  onPress={() => setTempSelectedAmPm("PM")}
-                >
-                  <Text
-                    style={[styles.timePickerItemText, tempSelectedAmPm === "PM" && styles.timePickerItemTextSelected]}
-                  >
-                    PM
-                  </Text>
-                </TouchableOpacity>
+      {/* ================= Add / Edit task sheet ================= */}
+      <Sheet visible={showModal} onClose={closeModal} darkMode={darkMode}>
+        <SheetHeader title={editingTask ? "Edit task" : "New task"} onClose={closeModal} darkMode={darkMode} />
+        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <TextInput
+            placeholder="What needs to be done?"
+            placeholderTextColor={placeholderColor}
+            value={form.title}
+            onChangeText={(title) => setForm((prev) => ({ ...prev, title }))}
+            className={`mb-3 rounded-2xl border px-4 py-3.5 text-base ${field} ${textMain}`}
+          />
+          <TextInput
+            placeholder="Description (optional)"
+            placeholderTextColor={placeholderColor}
+            value={form.description}
+            onChangeText={(description) => setForm((prev) => ({ ...prev, description }))}
+            multiline
+            numberOfLines={3}
+            textAlignVertical="top"
+            className={`mb-4 h-24 rounded-2xl border px-4 py-3.5 text-base ${field} ${textMain}`}
+          />
+
+          <View className="mb-4 flex-row gap-3">
+            <Pressable
+              onPress={() => setForm((prev) => ({ ...prev, showDatePicker: true }))}
+              className={`flex-1 flex-row items-center rounded-2xl border px-3.5 py-3 active:opacity-80 ${field}`}
+            >
+              <Ionicons name="calendar-outline" size={20} color="#0B6CF0" />
+              <View className="ml-2.5">
+                <Text className={`text-[11px] ${textMuted}`}>Date</Text>
+                <Text className={`text-[15px] font-semibold ${textMain}`}>
+                  {form.date.toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}
+                </Text>
               </View>
+            </Pressable>
+            <Pressable
+              onPress={() => openCustomTimePicker("mainDate")}
+              className={`flex-1 flex-row items-center rounded-2xl border px-3.5 py-3 active:opacity-80 ${field}`}
+            >
+              <Ionicons name="time-outline" size={20} color="#0B6CF0" />
+              <View className="ml-2.5">
+                <Text className={`text-[11px] ${textMuted}`}>Time</Text>
+                <Text className={`text-[15px] font-semibold ${textMain}`}>{formatTime(form.date)}</Text>
+              </View>
+            </Pressable>
+          </View>
+          <DateTimePickerModal
+            isVisible={form.showDatePicker}
+            mode="date"
+            date={form.date}
+            minimumDate={new Date()}
+            onConfirm={(date) => setForm((prev) => ({ ...prev, date, showDatePicker: false }))}
+            onCancel={() => setForm((prev) => ({ ...prev, showDatePicker: false }))}
+            themeVariant={darkMode ? "dark" : "light"}
+          />
+
+          <Text className={`mb-2 text-sm font-semibold ${textMain}`}>Priority</Text>
+          <View className="mb-4 flex-row gap-2">
+            {PRIORITIES.map((p) => {
+              const sel = form.priority === p.key
+              return (
+                <Pressable
+                  key={p.key}
+                  onPress={() => setForm((prev) => ({ ...prev, priority: p.key }))}
+                  className={`flex-1 items-center rounded-xl border py-2.5 active:opacity-80 ${sel ? p.selected : field}`}
+                >
+                  <Text className={`text-[13px] font-semibold ${sel ? "text-white" : textMuted}`}>{p.key}</Text>
+                </Pressable>
+              )
+            })}
+          </View>
+
+          <View className={`mb-4 flex-row items-center justify-between rounded-2xl border px-4 py-2.5 ${field}`}>
+            <View className="flex-row items-center">
+              <Ionicons name="repeat" size={20} color="#0B6CF0" />
+              <Text className={`ml-2.5 text-[15px] font-semibold ${textMain}`}>Repeat this task</Text>
             </View>
-            <TouchableOpacity onPress={handleCustomTimePickerConfirm} style={styles.timePickerSaveButton}>
-              <Text style={styles.timePickerSaveButtonText}>Done</Text>
-            </TouchableOpacity>
+            <Switch
+              value={form.recurring}
+              onValueChange={(val) => setForm((prev) => ({ ...prev, recurring: val }))}
+              trackColor={{ false: darkMode ? "#334155" : "#CBD5E1", true: "#0B6CF0" }}
+              thumbColor="#fff"
+            />
+          </View>
+
+          {form.recurring && (
+            <View className="mb-2">
+              <Text className={`mb-2 text-sm font-semibold ${textMain}`}>Frequency</Text>
+              <View className="mb-4 flex-row flex-wrap gap-2">
+                {["Daily", "Weekly", "Monthly", "Yearly", "Custom"].map((freq) => {
+                  const sel = form.recurringFrequency === freq
+                  return (
+                    <Pressable
+                      key={freq}
+                      onPress={() => setForm((prev) => ({ ...prev, recurringFrequency: freq }))}
+                      className={`rounded-full border px-4 py-2 active:opacity-80 ${sel ? "border-brand bg-brand" : field}`}
+                    >
+                      <Text className={`text-[13px] font-semibold ${sel ? "text-white" : textMuted}`}>{freq}</Text>
+                    </Pressable>
+                  )
+                })}
+              </View>
+
+              {form.recurringFrequency === "Custom" && (
+                <>
+                  <Text className={`mb-2 text-sm font-semibold ${textMain}`}>Days</Text>
+                  <View className="mb-4 flex-row justify-between">
+                    {["S", "M", "T", "W", "T", "F", "S"].map((day, index) => {
+                      const sel = form.recurringDays.includes(index)
+                      return (
+                        <Pressable
+                          key={index}
+                          onPress={() => toggleRecurringDay(index)}
+                          className={`size-10 items-center justify-center rounded-full border active:opacity-80 ${sel ? "border-brand bg-brand" : field}`}
+                        >
+                          <Text className={`text-sm font-bold ${sel ? "text-white" : textMuted}`}>{day}</Text>
+                        </Pressable>
+                      )
+                    })}
+                  </View>
+                  <Pressable
+                    onPress={() => openCustomTimePicker("recurringTime")}
+                    className={`mb-2 flex-row items-center justify-between rounded-2xl border px-4 py-3 active:opacity-80 ${field}`}
+                  >
+                    <Text className={`text-[15px] font-semibold ${textMain}`}>Repeat time</Text>
+                    <Text className="text-[15px] font-bold text-brand">{formatTime(form.recurringTime)}</Text>
+                  </Pressable>
+                </>
+              )}
+            </View>
+          )}
+
+          {editingTask && (
+            <View className={`mb-2 mt-2 flex-row flex-wrap gap-2 border-t pt-4 ${c("border-slate-200", "border-slate-700")}`}>
+              <Pressable
+                onPress={() => markTaskComplete(editingTask)}
+                className="flex-row items-center rounded-xl bg-green-600 px-3.5 py-2.5 active:opacity-80"
+              >
+                <Ionicons name={editingTask.completed ? "checkmark-circle" : "checkmark-circle-outline"} size={18} color="#fff" />
+                <Text className="ml-1.5 text-xs font-bold text-white">{editingTask.completed ? "Unmark" : "Complete"}</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => archiveTask(editingTask)}
+                className="flex-row items-center rounded-xl bg-amber-500 px-3.5 py-2.5 active:opacity-80"
+              >
+                <Ionicons name={originalOfEditing?.archived ? "archive" : "archive-outline"} size={18} color="#fff" />
+                <Text className="ml-1.5 text-xs font-bold text-white">{originalOfEditing?.archived ? "Unarchive" : "Archive"}</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => deleteTask(editingTask)}
+                className="flex-row items-center rounded-xl bg-red-500 px-3.5 py-2.5 active:opacity-80"
+              >
+                <Ionicons name={originalOfEditing?.deleted ? "trash" : "trash-outline"} size={18} color="#fff" />
+                <Text className="ml-1.5 text-xs font-bold text-white">{originalOfEditing?.deleted ? "Undelete" : "Delete"}</Text>
+              </Pressable>
+              {originalOfEditing?.deleted && (
+                <Pressable
+                  onPress={() => permanentlyDeleteTask(editingTask)}
+                  className="flex-row items-center rounded-xl bg-red-800 px-3.5 py-2.5 active:opacity-80"
+                >
+                  <Ionicons name="trash-bin" size={18} color="#fff" />
+                  <Text className="ml-1.5 text-xs font-bold text-white">Delete forever</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
+        </ScrollView>
+        <Pressable onPress={handleSave} className="mt-3 items-center rounded-2xl bg-brand py-4 shadow-md shadow-blue-500/40 active:opacity-80">
+          <Text className="text-base font-bold text-white">{editingTask ? "Update task" : "Create task"}</Text>
+        </Pressable>
+      </Sheet>
+
+      {/* ================= Time picker sheet ================= */}
+      <Sheet visible={showCustomTimePickerModal} onClose={() => setShowCustomTimePickerModal(false)} darkMode={darkMode}>
+        <SheetHeader title="Select time" onClose={() => setShowCustomTimePickerModal(false)} darkMode={darkMode} />
+        <View className="h-64 flex-row items-stretch">
+          <ScrollView className={`mx-1 flex-1 rounded-2xl border ${field}`} showsVerticalScrollIndicator={false}>
+            {generateHours().map((hour) => {
+              const now = new Date()
+              const isToday = form.date.toDateString() === now.toDateString()
+              const currentHour24 = now.getHours()
+              let displayHour24 = tempSelectedAmPm === "PM" && hour !== 12 ? hour + 12 : hour
+              if (tempSelectedAmPm === "AM" && hour === 12) displayHour24 = 0
+              if (currentEditingTimeTarget === "mainDate" && isToday && displayHour24 < currentHour24) return null
+              const sel = tempSelectedHour === hour
+              return (
+                <Pressable
+                  key={hour}
+                  onPress={() => setTempSelectedHour(hour)}
+                  className={`m-1 items-center rounded-xl py-3 ${sel ? "bg-brand" : ""}`}
+                >
+                  <Text className={`text-lg ${sel ? "font-bold text-white" : textMain}`}>{hour.toString().padStart(2, "0")}</Text>
+                </Pressable>
+              )
+            })}
+          </ScrollView>
+          <View className="justify-center">
+            <Text className={`text-2xl font-bold ${textMain}`}>:</Text>
+          </View>
+          <ScrollView className={`mx-1 flex-1 rounded-2xl border ${field}`} showsVerticalScrollIndicator={false}>
+            {generateMinutes().map((minute) => {
+              const now = new Date()
+              const isToday = form.date.toDateString() === now.toDateString()
+              const currentHour24 = now.getHours()
+              const currentMinute = now.getMinutes()
+              let selectedHour24 = tempSelectedAmPm === "PM" && tempSelectedHour !== 12 ? tempSelectedHour + 12 : tempSelectedHour
+              if (tempSelectedAmPm === "AM" && tempSelectedHour === 12) selectedHour24 = 0
+              if (currentEditingTimeTarget === "mainDate" && isToday && selectedHour24 === currentHour24 && minute < currentMinute) return null
+              const sel = tempSelectedMinute === minute
+              return (
+                <Pressable
+                  key={minute}
+                  onPress={() => setTempSelectedMinute(minute)}
+                  className={`m-1 items-center rounded-xl py-3 ${sel ? "bg-brand" : ""}`}
+                >
+                  <Text className={`text-lg ${sel ? "font-bold text-white" : textMain}`}>{minute.toString().padStart(2, "0")}</Text>
+                </Pressable>
+              )
+            })}
+          </ScrollView>
+          <View className="mx-1 w-20 justify-center gap-2">
+            {["AM", "PM"].map((ap) => {
+              const sel = tempSelectedAmPm === ap
+              return (
+                <Pressable
+                  key={ap}
+                  onPress={() => setTempSelectedAmPm(ap)}
+                  className={`items-center rounded-xl border py-4 ${sel ? "border-brand bg-brand" : field}`}
+                >
+                  <Text className={`text-base font-bold ${sel ? "text-white" : textMain}`}>{ap}</Text>
+                </Pressable>
+              )
+            })}
           </View>
         </View>
-      </Modal>
+        <Pressable onPress={handleCustomTimePickerConfirm} className="mt-4 items-center rounded-2xl bg-brand py-4 active:opacity-80">
+          <Text className="text-base font-bold text-white">Done</Text>
+        </Pressable>
+      </Sheet>
 
-      {/* Monthly Calendar Modal */}
-      <Modal visible={showMonthCalendar} transparent animationType="fade">
-        <View style={styles.modalContainer}>
-          <View style={styles.monthCalendarContent}>
-            <View style={styles.monthCalendarHeader}>
-              <TouchableOpacity
+      {/* ================= Month calendar ================= */}
+      <Modal visible={showMonthCalendar} transparent animationType="fade" onRequestClose={() => setShowMonthCalendar(false)} statusBarTranslucent>
+        <View className="flex-1 items-center justify-center bg-black/50 px-5">
+          <Pressable className="absolute inset-0" onPress={() => setShowMonthCalendar(false)} />
+          <View className={`w-full rounded-3xl p-5 ${c("bg-white", "bg-night-card")}`}>
+            <View className="mb-4 flex-row items-center justify-between">
+              <Pressable
+                hitSlop={10}
                 onPress={() => {
-                  const newMonth = new Date(currentMonthView)
-                  newMonth.setMonth(newMonth.getMonth() - 1)
-                  setCurrentMonthView(newMonth)
+                  const m = new Date(currentMonthView)
+                  m.setMonth(m.getMonth() - 1)
+                  setCurrentMonthView(m)
                 }}
+                className={`size-9 items-center justify-center rounded-full ${c("bg-slate-100", "bg-night-row")}`}
               >
-                <Ionicons name="chevron-back" size={24} color={theme.text} />
-              </TouchableOpacity>
-              <Text style={styles.monthCalendarTitle}>
+                <Ionicons name="chevron-back" size={18} color={iconMuted} />
+              </Pressable>
+              <Text className={`text-lg font-bold ${textMain}`}>
                 {currentMonthView.toLocaleDateString("en-ZA", { month: "long", year: "numeric" })}
               </Text>
-              <TouchableOpacity
+              <Pressable
+                hitSlop={10}
                 onPress={() => {
-                  const newMonth = new Date(currentMonthView)
-                  newMonth.setMonth(newMonth.getMonth() + 1)
-                  setCurrentMonthView(newMonth)
+                  const m = new Date(currentMonthView)
+                  m.setMonth(m.getMonth() + 1)
+                  setCurrentMonthView(m)
                 }}
+                className={`size-9 items-center justify-center rounded-full ${c("bg-slate-100", "bg-night-row")}`}
               >
-                <Ionicons name="chevron-forward" size={24} color={theme.text} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setShowMonthCalendar(false)}>
-                <Ionicons name="close" size={24} color={theme.textSecondary} />
-              </TouchableOpacity>
+                <Ionicons name="chevron-forward" size={18} color={iconMuted} />
+              </Pressable>
             </View>
-            <View style={styles.weekDaysHeader}>
+            <View className="mb-1 flex-row">
               {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
-                <Text key={day} style={styles.weekDayText}>
-                  {day}
-                </Text>
+                <Text key={day} className={`flex-1 text-center text-[11px] font-semibold ${textMuted}`}>{day}</Text>
               ))}
             </View>
-            <View style={styles.calendarGrid}>
+            <View className="flex-row flex-wrap">
               {Array.from({ length: 42 }, (_, i) => {
                 const today = new Date()
-                const firstDayOfMonth = new Date(currentMonthView.getFullYear(), currentMonthView.getMonth(), 1)
-                const startDate = new Date(firstDayOfMonth)
-                startDate.setDate(startDate.getDate() - firstDayOfMonth.getDay())
-                const currentDate = new Date(startDate)
-                currentDate.setDate(startDate.getDate() + i)
-                const isCurrentMonth = currentDate.getMonth() === currentMonthView.getMonth()
-                const isToday = currentDate.toDateString() === today.toDateString()
-                const isSelected = currentDate.toDateString() === selectedDate.toDateString()
+                const first = new Date(currentMonthView.getFullYear(), currentMonthView.getMonth(), 1)
+                const cur = new Date(first)
+                cur.setDate(1 - first.getDay() + i)
+                const inMonth = cur.getMonth() === currentMonthView.getMonth()
+                const isToday = cur.toDateString() === today.toDateString()
+                const isSel = cur.toDateString() === selectedDate.toDateString()
+                const has = taskDays.has(cur.toDateString())
                 return (
-                  <TouchableOpacity
+                  <Pressable
                     key={i}
-                    style={[
-                      styles.calendarDay,
-                      isToday && styles.todayCalendarDay,
-                      isSelected && styles.selectedCalendarDay,
-                    ]}
                     onPress={() => {
-                      setSelectedDate(currentDate)
+                      setSelectedDate(cur)
                       setShowMonthCalendar(false)
                     }}
+                    className="w-[14.2857%] items-center py-0.5"
                   >
-                    <Text
-                      style={[
-                        styles.calendarDayText,
-                        !isCurrentMonth && styles.otherMonthText,
-                        isToday && styles.todayCalendarText,
-                        isSelected && styles.selectedCalendarText,
-                      ]}
+                    <View
+                      className={`size-10 items-center justify-center rounded-full ${
+                        isSel ? "bg-brand" : isToday ? "border-2 border-brand" : ""
+                      }`}
                     >
-                      {currentDate.getDate()}
-                    </Text>
-                  </TouchableOpacity>
+                      <Text
+                        className={`text-sm ${
+                          isSel ? "font-bold text-white" : !inMonth ? c("text-slate-300", "text-slate-600") : isToday ? "font-bold text-brand" : textMain
+                        }`}
+                      >
+                        {cur.getDate()}
+                      </Text>
+                    </View>
+                    <View className={`mt-0.5 size-1 rounded-full ${has && !isSel ? "bg-green-500" : "bg-transparent"}`} />
+                  </Pressable>
                 )
               })}
             </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Task Tabs Modal */}
-      <Modal visible={showTaskTabsModal} transparent animationType="fade">
-        <View style={styles.modalContainer}>
-          <View style={styles.taskTabsModalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>My Tasks</Text>
-              <TouchableOpacity onPress={() => setShowTaskTabsModal(false)}>
-                <Ionicons name="close" size={24} color={theme.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.taskTabsContainer}>
-              {["Upcoming", "Complete", "Archive", "Deleted"].map((tab) => (
-                <TouchableOpacity
-                  key={tab}
-                  style={[styles.taskTabButton, currentTaskTab === tab && styles.taskTabButtonSelected]}
-                  onPress={() => setCurrentTaskTab(tab)}
-                >
-                  <Text style={[styles.taskTabButtonText, currentTaskTab === tab && styles.taskTabButtonTextSelected]}>
-                    {tab}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <FlatList
-              data={getTasksForCurrentTab()}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => renderTaskRow(item, true)}
-              ListEmptyComponent={() => <Text style={styles.noTasksText}>No tasks in this category.</Text>}
-              contentContainerStyle={styles.taskListContainer}
-            />
-          </View>
-        </View>
-      </Modal>
-
-      {/* More Options Modal */}
-      <Modal visible={showMoreModal} transparent animationType="fade">
-        <View style={styles.modalContainer}>
-          <View style={styles.moreModalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>More Options</Text>
-              <TouchableOpacity onPress={() => setShowMoreModal(false)}>
-                <Ionicons name="close" size={24} color={theme.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView>
-              <TouchableOpacity style={styles.moreOptionButton} onPress={handleSettingsPress}>
-                <Ionicons name="settings-outline" size={22} color={theme.text} />
-                <Text style={styles.moreOptionButtonText}>Settings</Text>
-              </TouchableOpacity>
-              <View style={styles.moreOptionGroup}>
-                <Text style={styles.moreOptionGroupTitle}>About App</Text>
-                <TouchableOpacity style={styles.moreOptionSubButton} onPress={handlePrivacyPolicyPress}>
-                  <Text style={styles.moreOptionSubButtonText}>Privacy Policy</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.moreOptionSubButton} onPress={handleTermsAndConditionsPress}>
-                  <Text style={styles.moreOptionSubButtonText}>Terms and Conditions</Text>
-                </TouchableOpacity>
-              </View>
-              <TouchableOpacity style={styles.moreOptionButton} onPress={handleCheckForUpdatesPress}>
-                <Ionicons name="cloud-download-outline" size={22} color={theme.text} />
-                <Text style={styles.moreOptionButtonText}>Check for Updates</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.moreOptionButton, styles.logoutButton]} onPress={handleLogoutPress}>
-                <Ionicons name="log-out-outline" size={22} color= 'white' />
-                <Text style={[styles.moreOptionButtonText, styles.logoutButtonText]}>Logout</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Bottom Nav */}
-      <View style={styles.bottomNav}>
-        {["Home", "Tasks", "More", "Profile"].map((tab) => {
-          const active = activeTab === tab
-          return (
-            <TouchableOpacity
-              key={tab}
-              onPress={
-                tab === "Tasks"
-                  ? () => setShowTaskTabsModal(true)
-                  : tab === "More"
-                    ? () => setShowMoreModal(true)
-                    : tab === "Profile"
-                      ? () => navigation.navigate("Profile")
-                      : () => setActiveTab(tab)
-              }
-              style={styles.navItem}
-              activeOpacity={0.8}
+            <Pressable
+              onPress={() => {
+                setSelectedDate(new Date())
+                setCurrentMonthView(new Date())
+                setShowMonthCalendar(false)
+              }}
+              className="mt-3 items-center rounded-2xl bg-brand/10 py-3 active:opacity-70"
             >
-              <Ionicons name={getIcon(tab, active)} size={24} color={active ? ui.blue : ui.muted} />
-              <Text style={[styles.navText, { color: active ? ui.blue : ui.muted }, active && styles.navTextActive]}>
-                {tab}
+              <Text className="font-bold text-brand">Jump to today</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ================= My Tasks sheet ================= */}
+      <Sheet visible={showTaskTabsModal} onClose={() => setShowTaskTabsModal(false)} darkMode={darkMode}>
+        <SheetHeader title="My tasks" onClose={() => setShowTaskTabsModal(false)} darkMode={darkMode} />
+        <View className={`mb-4 flex-row rounded-2xl p-1 ${c("bg-slate-100", "bg-night-row")}`}>
+          {["Upcoming", "Complete", "Archive", "Deleted"].map((tab) => {
+            const sel = currentTaskTab === tab
+            return (
+              <Pressable
+                key={tab}
+                onPress={() => setCurrentTaskTab(tab)}
+                className={`flex-1 items-center rounded-xl py-2.5 ${sel ? "bg-brand" : ""}`}
+              >
+                <Text className={`text-[12px] font-bold ${sel ? "text-white" : textMuted}`}>{tab}</Text>
+                <Text className={`text-[10px] ${sel ? "text-white/80" : textMuted}`}>{tabCounts[tab]}</Text>
+              </Pressable>
+            )
+          })}
+        </View>
+        <FlatList
+          data={getTasksForCurrentTab()}
+          keyExtractor={(item) => item.id}
+          style={{ maxHeight: 420 }}
+          showsVerticalScrollIndicator={false}
+          renderItem={({ item }) => renderRow(item, true)}
+          ListEmptyComponent={
+            <View className="items-center py-10">
+              <Ionicons name="file-tray-outline" size={40} color={iconMuted} />
+              <Text className={`mt-2 text-sm ${textMuted}`}>No tasks in this category.</Text>
+            </View>
+          }
+        />
+      </Sheet>
+
+      {/* ================= Reminders sheet ================= */}
+      <Sheet visible={showRemindersModal} onClose={() => setShowRemindersModal(false)} darkMode={darkMode}>
+        <SheetHeader title="Reminders" onClose={() => setShowRemindersModal(false)} darkMode={darkMode} />
+
+        {!notifState.granted ? (
+          <View className="mb-4 rounded-2xl bg-red-500/10 p-4">
+            <View className="flex-row items-center">
+              <Ionicons name="notifications-off-outline" size={22} color="#EF4444" />
+              <Text className="ml-2 flex-1 text-[15px] font-bold text-red-500">Notifications are off</Text>
+            </View>
+            <Text className={`mt-1.5 text-[13px] ${textMuted}`}>
+              Turn them on to get reminded before your tasks are due.
+            </Text>
+            <Pressable
+              onPress={async () => {
+                if (notifState.canAskAgain) {
+                  await requestPermission()
+                  refreshNotifState()
+                  syncTaskReminders(reminderTasks)
+                } else {
+                  openSystemSettings()
+                }
+              }}
+              className="mt-3 items-center rounded-xl bg-red-500 py-2.5 active:opacity-80"
+            >
+              <Text className="font-bold text-white">{notifState.canAskAgain ? "Allow notifications" : "Open settings"}</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View className="mb-4 flex-row items-center rounded-2xl bg-green-500/15 px-4 py-3">
+            <Ionicons name="notifications" size={20} color="#16A34A" />
+            <Text className={`ml-2 flex-1 text-[14px] font-semibold ${c("text-green-700", "text-green-300")}`}>
+              Notifications are on
+            </Text>
+            <Pressable
+              onPress={async () => {
+                const ok = await sendTestNotification()
+                if (ok) Alert.alert("Test sent", "You should get a notification in a few seconds.")
+              }}
+              className="rounded-full bg-green-600 px-3.5 py-1.5 active:opacity-80"
+            >
+              <Text className="text-xs font-bold text-white">Send test</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {notifState.granted && !notifState.exact && (
+          <Pressable
+            onPress={async () => {
+              await requestExactAlarmPermission()
+              refreshNotifState()
+              syncTaskReminders(reminderTasks)
+            }}
+            className="mb-4 flex-row items-center rounded-2xl bg-amber-500/15 px-4 py-3 active:opacity-80"
+          >
+            <Ionicons name="alarm-outline" size={20} color="#D97706" />
+            <View className="ml-2 flex-1">
+              <Text className={`text-[14px] font-semibold ${c("text-amber-700", "text-amber-300")}`}>Allow exact timing</Text>
+              <Text className={`text-xs ${textMuted}`}>Without it Android may delay reminders by a few minutes.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={iconMuted} />
+          </Pressable>
+        )}
+
+        <Text className={`mb-2 text-sm font-semibold ${textMain}`}>Coming up</Text>
+        {getUpcomingReminders(6).length === 0 ? (
+          <View className="items-center py-6">
+            <Ionicons name="moon-outline" size={34} color={iconMuted} />
+            <Text className={`mt-2 text-center text-sm ${textMuted}`}>
+              No reminders scheduled. Add a task with a future time and it will show up here.
+            </Text>
+          </View>
+        ) : (
+          getUpcomingReminders(6).map((r) => (
+            <View key={r.id} className={`mb-2 flex-row items-center rounded-2xl px-4 py-3 ${c("bg-slate-50", "bg-night-row")}`}>
+              <View className={`size-9 items-center justify-center rounded-xl ${r.kind === "due" ? "bg-red-500/15" : "bg-brand/10"}`}>
+                <Ionicons name={r.kind === "due" ? "alarm-outline" : r.kind === "snooze" ? "moon-outline" : "notifications-outline"} size={18} color={r.kind === "due" ? "#EF4444" : "#0B6CF0"} />
+              </View>
+              <View className="ml-3 min-w-0 flex-1">
+                <Text numberOfLines={1} className={`text-[14px] font-semibold ${textMain}`}>{r.title}</Text>
+                <Text numberOfLines={1} className={`text-xs ${textMuted}`}>{r.body}</Text>
+              </View>
+              <Text className={`ml-2 text-right text-[11px] font-medium ${textMuted}`}>
+                {r.date.toLocaleDateString("en-ZA", { day: "numeric", month: "short" })}
+                {"\n"}
+                {formatTime(r.date)}
               </Text>
-              <View style={[styles.navIndicator, active && { backgroundColor: ui.blue }]} />
-            </TouchableOpacity>
-          )
-        })}
+            </View>
+          ))
+        )}
+      </Sheet>
+
+      {/* ================= More sheet ================= */}
+      <Sheet visible={showMoreModal} onClose={() => setShowMoreModal(false)} darkMode={darkMode}>
+        <SheetHeader title="More" onClose={() => setShowMoreModal(false)} darkMode={darkMode} />
+        {[
+          { icon: "settings-outline", label: "Settings", onPress: handleSettingsPress },
+          { icon: "shield-checkmark-outline", label: "Privacy policy", onPress: handlePrivacyPolicyPress },
+          { icon: "document-text-outline", label: "Terms and conditions", onPress: handleTermsAndConditionsPress },
+          { icon: "cloud-download-outline", label: "Check for updates", onPress: handleCheckForUpdatesPress },
+        ].map((item) => (
+          <Pressable
+            key={item.label}
+            onPress={item.onPress}
+            className={`mb-2.5 flex-row items-center rounded-2xl px-4 py-3.5 active:opacity-70 ${c("bg-slate-50", "bg-night-row")}`}
+          >
+            <View className="size-9 items-center justify-center rounded-xl bg-brand/10">
+              <Ionicons name={item.icon} size={20} color="#0B6CF0" />
+            </View>
+            <Text className={`ml-3 flex-1 text-[15px] font-semibold ${textMain}`}>{item.label}</Text>
+            <Ionicons name="chevron-forward" size={18} color={iconMuted} />
+          </Pressable>
+        ))}
+        <Pressable
+          onPress={handleLogoutPress}
+          className="mt-2 flex-row items-center justify-center rounded-2xl bg-red-500 py-3.5 active:opacity-80"
+        >
+          <Ionicons name="log-out-outline" size={20} color="#fff" />
+          <Text className="ml-2 text-[15px] font-bold text-white">Log out</Text>
+        </Pressable>
+      </Sheet>
+
+      {/* ================= Toast ================= */}
+      {toast && (
+        <View pointerEvents="none" className="absolute inset-x-6 items-center" style={{ top: insets.top + 10 }}>
+          <View className="flex-row items-center rounded-full bg-ink px-4 py-2.5 shadow-lg">
+            <Ionicons name="checkmark-circle" size={18} color="#4ADE80" />
+            <Text numberOfLines={2} className="ml-2 text-[13px] font-semibold text-white">{toast}</Text>
+          </View>
+        </View>
+      )}
+
+      {/* ================= Bottom nav ================= */}
+      <View
+        style={{ bottom: navBottom }}
+        className={`absolute inset-x-3 h-[64px] rounded-3xl shadow-xl shadow-blue-900/20 ${c("bg-white", "bg-night-card")}`}
+      >
+        <View className="h-full flex-row overflow-hidden rounded-3xl">
+          {["Home", "Tasks", "More", "Profile"].map((tab) => {
+            const active = activeTab === tab
+            return (
+              <Pressable
+                key={tab}
+                onPress={
+                  tab === "Tasks"
+                    ? () => setShowTaskTabsModal(true)
+                    : tab === "More"
+                      ? () => setShowMoreModal(true)
+                      : tab === "Profile"
+                        ? () => navigation.navigate("Profile")
+                        : () => setActiveTab(tab)
+                }
+                className="flex-1 items-center justify-center active:opacity-70"
+              >
+                <Ionicons name={getIcon(tab, active)} size={24} color={active ? "#0B6CF0" : iconMuted} />
+                <Text className={`mt-0.5 text-xs ${active ? "font-bold text-brand" : `font-medium ${textMuted}`}`}>{tab}</Text>
+                <View className={`absolute bottom-0 h-1 w-10 rounded-t-full ${active ? "bg-brand" : "bg-transparent"}`} />
+              </Pressable>
+            )
+          })}
+        </View>
       </View>
     </View>
   )
 }
-
-// Dynamic styles function
-const createStyles = (theme, darkMode) =>
-  StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: darkMode ? "#0B1220" : "#EEF4FC",
-    },
-    // ---- hero ----
-    hero: {
-      width: "100%",
-      backgroundColor: "#0560C8",
-      overflow: "hidden",
-    },
-    heroGlow: {
-      position: "absolute",
-      left: -60,
-      right: -60,
-      bottom: -40,
-      height: 140,
-      borderRadius: 200,
-      backgroundColor: "rgba(110, 180, 245, 0.35)",
-    },
-    heroImage: {
-      position: "absolute",
-      right: 0,
-      top: 10,
-    },
-    heroTextWrap: {
-      position: "absolute",
-      left: 20,
-      top: Platform.OS === "android" ? (StatusBar.currentHeight || 24) + 10 : 56,
-    },
-    greetingText: {
-      fontSize: 26,
-      fontWeight: "800",
-      color: "#fff",
-      letterSpacing: 0.2,
-    },
-    usernameText: {
-      fontSize: 19,
-      fontWeight: "400",
-      color: "#fff",
-      marginTop: 2,
-    },
-    greetingUnderline: {
-      width: 56,
-      height: 4,
-      borderRadius: 3,
-      backgroundColor: "#4ADE6B",
-      marginTop: 9,
-    },
-    bellButton: {
-      position: "absolute",
-      right: 20,
-      top: Platform.OS === "android" ? (StatusBar.currentHeight || 24) + 10 : 56,
-    },
-    bellDot: {
-      position: "absolute",
-      top: 0,
-      right: 1,
-      width: 9,
-      height: 9,
-      borderRadius: 6,
-      backgroundColor: "#FF3B30",
-    },
-    heroWaveGreen: {
-      position: "absolute",
-      left: -80,
-      right: -80,
-      bottom: -62,
-      height: 90,
-      borderRadius: 400,
-      backgroundColor: "#3FCB5E",
-      transform: [{ rotate: "-2deg" }],
-    },
-    heroWaveCover: {
-      position: "absolute",
-      left: -60,
-      right: -60,
-      bottom: -78,
-      height: 90,
-      borderRadius: 400,
-    },
-    // ---- main card ----
-    mainCard: {
-      flex: 1,
-      marginHorizontal: 12,
-      marginTop: -26,
-      marginBottom: 86,
-      backgroundColor: darkMode ? "#141C2E" : "#FFFFFF",
-      borderRadius: 24,
-      paddingTop: 20,
-      paddingHorizontal: 0,
-      shadowColor: "#2B5FA8",
-      shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: darkMode ? 0.4 : 0.12,
-      shadowRadius: 18,
-      elevation: 6,
-      overflow: "hidden",
-    },
-    dateSummaryContainer: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      paddingHorizontal: 20,
-      marginBottom: 18,
-    },
-    dateLeft: {
-      flexDirection: "row",
-      alignItems: "center",
-    },
-    dateText: {
-      fontSize: 20,
-      fontWeight: "800",
-      color: darkMode ? "#F2F5FA" : "#0F1B3D",
-    },
-    taskCountText: {
-      fontSize: 14,
-      color: darkMode ? "#A8B3C7" : "#3A4560",
-      marginTop: 2,
-    },
-    calendarButtonLarge: {
-      width: 42,
-      height: 42,
-      borderRadius: 21,
-      backgroundColor: darkMode ? "#143626" : "#D5F3DC",
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    calendarScroll: {
-      flexGrow: 0,
-      marginBottom: 14,
-    },
-    calendarScrollContent: {
-      paddingHorizontal: 16,
-      paddingVertical: 6,
-    },
-    dayBlock: {
-      width: 46,
-      height: 60,
-      marginRight: 8,
-      backgroundColor: darkMode ? "#1B2438" : "#F1F3F7",
-      borderRadius: 14,
-      justifyContent: "center",
-      alignItems: "center",
-      borderWidth: 1,
-      borderColor: darkMode ? "#2A3550" : "#E6E9EF",
-    },
-    selectedDayBlock: {
-      backgroundColor: "#0B6CF0",
-      borderColor: "#0B6CF0",
-      shadowColor: "#0B6CF0",
-      shadowOffset: { width: 0, height: 6 },
-      shadowOpacity: 0.35,
-      shadowRadius: 8,
-      elevation: 5,
-    },
-    dayLabel: {
-      fontSize: 12,
-      fontWeight: "500",
-      color: darkMode ? "#A8B3C7" : "#3A4560",
-    },
-    dayNumber: {
-      fontSize: 17,
-      fontWeight: "700",
-      color: darkMode ? "#F2F5FA" : "#0F1B3D",
-      marginTop: 2,
-    },
-    selectedDayLabel: {
-      color: "#fff",
-    },
-    selectedDayNumber: {
-      color: "#fff",
-    },
-    selectedDayDot: {
-      width: 5,
-      height: 5,
-      borderRadius: 3,
-      backgroundColor: "#fff",
-      marginTop: 3,
-    },
-    // ---- task list ----
-    taskScroll: {
-      flex: 1,
-    },
-    taskScrollContent: {
-      paddingHorizontal: 12,
-      paddingTop: 8,
-      paddingBottom: 90,
-    },
-    taskCard: {
-      flexDirection: "row",
-      alignItems: "center",
-      height: 56,
-      marginBottom: 10,
-      borderRadius: 15,
-      borderLeftWidth: 4,
-      overflow: "hidden",
-      shadowColor: "#2B5FA8",
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: darkMode ? 0.3 : 0.1,
-      shadowRadius: 10,
-      elevation: 3,
-    },
-    timeBlock: {
-      width: 80,
-      height: "100%",
-      justifyContent: "center",
-      alignItems: "center",
-      borderTopRightRadius: 16,
-      borderBottomRightRadius: 16,
-    },
-    timeBlockText: {
-      fontSize: 11.5,
-      fontWeight: "500",
-      marginTop: 2,
-    },
-    checkCircle: {
-      width: 24,
-      height: 24,
-      borderRadius: 12,
-      borderWidth: 2,
-      marginLeft: 10,
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    taskTextWrap: {
-      flex: 1,
-      marginLeft: 12,
-      marginRight: 8,
-    },
-    taskTitle: {
-      fontSize: 15,
-      fontWeight: "500",
-    },
-    taskTitleDone: {
-      fontWeight: "600",
-    },
-    taskDate: {
-      fontSize: 12,
-      marginTop: 1,
-    },
-    priorityPill: {
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      borderRadius: 14,
-      marginRight: 10,
-    },
-    priorityPillText: {
-      fontSize: 11.5,
-      fontWeight: "700",
-    },
-    priorityBadge: {
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 10,
-      marginLeft: 10,
-    },
-    priorityBadgeText: {
-      fontSize: 12,
-      fontWeight: "bold",
-      color: "#fff",
-    },
-    emptyWrap: {
-      alignItems: "center",
-      marginTop: 40,
-    },
-    noTasksText: {
-      fontSize: 16,
-      color: theme.textSecondary,
-      textAlign: "center",
-      marginTop: 8,
-      alignSelf: "center",
-      width: "100%",
-      paddingHorizontal: 30,
-    },
-    fab: {
-      position: "absolute",
-      bottom: 22,
-      right: 20,
-      width: 54,
-      height: 54,
-      borderRadius: 27,
-      backgroundColor: "#1FA347",
-      justifyContent: "center",
-      alignItems: "center",
-      shadowColor: "#1FA347",
-      shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: 0.4,
-      shadowRadius: 12,
-      elevation: 8,
-    },
-    modalContainer: {
-      flex: 1,
-      backgroundColor: "rgba(0, 0, 0, 0.7)",
-      justifyContent: "center",
-      alignItems: "center",
-    },
-    modalContent: {
-      width: "90%",
-      backgroundColor: theme.surface,
-      borderRadius: 15,
-      padding: 20,
-      maxHeight: "85%",
-      shadowColor: theme.shadow,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.25,
-      shadowRadius: 8,
-      elevation: 10,
-    },
-    modalHeader: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      marginBottom: 20,
-      paddingBottom: 15,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.border,
-    },
-    modalTitle: {
-      fontSize: 20,
-      fontWeight: "bold",
-      color: theme.text,
-    },
-    modalForm: {
-      flexGrow: 1,
-      paddingBottom: 10,
-    },
-    input: {
-      backgroundColor: theme.card,
-      padding: 15,
-      marginBottom: 15,
-      borderRadius: 10,
-      fontSize: 16,
-      color: theme.text,
-      borderWidth: 1,
-      borderColor: theme.border,
-    },
-    textArea: {
-      height: 100,
-      textAlignVertical: "top",
-    },
-    label: {
-      fontWeight: "600",
-      marginBottom: 10,
-      fontSize: 16,
-      color: theme.text,
-    },
-    datePickerTrigger: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      backgroundColor: theme.card,
-      padding: 15,
-      marginBottom: 15,
-      borderRadius: 10,
-      borderWidth: 1,
-      borderColor: theme.border,
-    },
-    datePickerTriggerText: {
-      fontSize: 16,
-      color: theme.text,
-    },
-    timePickerTrigger: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      backgroundColor: theme.card,
-      padding: 15,
-      marginBottom: 15,
-      borderRadius: 10,
-      borderWidth: 1,
-      borderColor: theme.border,
-    },
-    timePickerTriggerText: {
-      fontSize: 16,
-      color: theme.text,
-    },
-    pickerWrapper: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 10,
-      marginBottom: 15,
-    },
-    priorityButton: {
-      paddingVertical: 10,
-      paddingHorizontal: 15,
-      backgroundColor: theme.card,
-      borderRadius: 10,
-      minWidth: 90,
-      alignItems: "center",
-      borderWidth: 1,
-      borderColor: theme.border,
-    },
-    prioritySelected: {
-      backgroundColor: theme.primary,
-      borderColor: theme.primary,
-    },
-    priorityButtonText: {
-      fontSize: 14,
-      color: theme.textSecondary,
-      fontWeight: "500",
-    },
-    priorityButtonTextSelected: {
-      color: "#fff",
-      fontWeight: "bold",
-    },
-    switchContainer: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      marginBottom: 15,
-      paddingVertical: 5,
-    },
-    switchLabel: {
-      fontSize: 16,
-      fontWeight: "500",
-      color: theme.text,
-    },
-    saveButton: {
-      backgroundColor: theme.primary,
-      padding: 18,
-      borderRadius: 12,
-      marginTop: 10,
-      alignSelf: "stretch",
-    },
-    saveButtonText: {
-      color: "#fff",
-      textAlign: "center",
-      fontSize: 18,
-      fontWeight: "bold",
-    },
-    daysSelector: {
-      flexDirection: "row",
-      justifyContent: "space-around",
-      marginBottom: 15,
-    },
-    dayButton: {
-      width: 30,
-      height: 30,
-      borderRadius: 10,
-      backgroundColor: theme.card,
-      justifyContent: "center",
-      alignItems: "center",
-      borderWidth: 1,
-      borderColor: theme.border,
-    },
-    dayButtonSelected: {
-      backgroundColor: theme.primary,
-      borderColor: theme.primary,
-    },
-    dayButtonText: {
-      fontSize: 12,
-      color: theme.textSecondary,
-      fontWeight: "500",
-    },
-    dayButtonTextSelected: {
-      color: "#fff",
-      fontWeight: "bold",
-    },
-    monthCalendarContent: {
-      margin: 20,
-      padding: 20,
-      backgroundColor: theme.surface,
-      borderRadius: 10,
-      maxHeight: "80%",
-      shadowColor: theme.shadow,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.25,
-      shadowRadius: 8,
-      elevation: 10,
-    },
-    monthCalendarHeader: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      marginBottom: 20,
-      paddingBottom: 15,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.border,
-    },
-    monthCalendarTitle: {
-      fontSize: 20,
-      fontWeight: "bold",
-      color: theme.text,
-    },
-    weekDaysHeader: {
-      flexDirection: "row",
-      marginBottom: 10,
-    },
-    weekDayText: {
-      flex: 1,
-      textAlign: "center",
-      fontSize: 11,
-      fontWeight: "600",
-      color: theme.textSecondary,
-      paddingVertical: 8,
-    },
-    calendarGrid: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-    },
-    calendarDay: {
-      width: "14.28%",
-      aspectRatio: 1,
-      justifyContent: "center",
-      alignItems: "center",
-      borderRadius: 8,
-      margin: 1,
-    },
-    todayCalendarDay: {
-      backgroundColor: theme.primary,
-    },
-    selectedCalendarDay: {
-      backgroundColor: theme.danger,
-    },
-    calendarDayText: {
-      fontSize: 11,
-      color: theme.text,
-    },
-    todayCalendarText: {
-      color: "#fff",
-      fontWeight: "bold",
-      fontSize: 10,
-    },
-    selectedCalendarText: {
-      color: "#fff",
-      fontWeight: "bold",
-    },
-    otherMonthText: {
-      color: theme.textTertiary,
-    },
-    bottomNav: {
-      flexDirection: "row",
-      justifyContent: "space-around",
-      alignItems: "center",
-      height: 64,
-      backgroundColor: darkMode ? "#141C2E" : "#FFFFFF",
-      position: "absolute",
-      bottom: Platform.OS === "ios" ? 22 : 14,
-      left: 12,
-      right: 12,
-      borderRadius: 24,
-      shadowColor: "#2B5FA8",
-      shadowOffset: { width: 0, height: 6 },
-      shadowOpacity: darkMode ? 0.4 : 0.14,
-      shadowRadius: 16,
-      elevation: 10,
-      overflow: "hidden",
-    },
-    navItem: {
-      flex: 1,
-      height: "100%",
-      alignItems: "center",
-      justifyContent: "center",
-      paddingTop: 6,
-    },
-    navText: {
-      fontSize: 12,
-      marginTop: 3,
-      fontWeight: "500",
-    },
-    navTextActive: {
-      fontWeight: "700",
-    },
-    navIndicator: {
-      position: "absolute",
-      bottom: 0,
-      width: 40,
-      height: 4,
-      borderTopLeftRadius: 4,
-      borderTopRightRadius: 4,
-      backgroundColor: "transparent",
-    },
-    taskActionsContainer: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      flexWrap: "wrap",
-      gap: 8,
-      marginTop: 20,
-      paddingTop: 15,
-      borderTopWidth: 1,
-      borderTopColor: theme.border,
-    },
-    taskActionButton: {
-      flexDirection: "row",
-      alignItems: "center",
-      paddingVertical: 8,
-      paddingHorizontal: 12,
-      borderRadius: 8,
-      backgroundColor: theme.textTertiary,
-    },
-    taskActionButtonText: {
-      color: "#fff",
-      marginLeft: 6,
-      fontWeight: "bold",
-      fontSize: 12,
-    },
-    completeButton: {
-      backgroundColor: theme.success,
-    },
-    archiveButton: {
-      backgroundColor: theme.warning,
-    },
-    deleteButton: {
-      backgroundColor: theme.danger,
-    },
-    taskTabsModalContent: {
-      width: "95%",
-      backgroundColor: theme.surface,
-      borderRadius: 15,
-      padding: 20,
-      maxHeight: "90%",
-      shadowColor: theme.shadow,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.25,
-      shadowRadius: 8,
-      elevation: 10,
-    },
-    taskTabsContainer: {
-      flexDirection: "row",
-      justifyContent: "space-around",
-      marginBottom: 20,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.border,
-      paddingBottom: 10,
-    },
-    taskTabButton: {
-      paddingVertical: 10,
-      paddingHorizontal: 15,
-      borderRadius: 10,
-    },
-    taskTabButtonSelected: {
-      backgroundColor: theme.primary,
-    },
-    taskTabButtonText: {
-      color: theme.textSecondary,
-      fontWeight: "600",
-    },
-    taskTabButtonTextSelected: {
-      color: "#fff",
-    },
-    taskListContainer: {
-      paddingBottom: 20,
-    },
-    taskListItem: {
-      padding: 15,
-      borderRadius: 15,
-      marginBottom: 10,
-      position: "relative",
-    },
-    taskListItemContent: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      marginBottom: 5,
-    },
-    taskListItemTitle: {
-      fontSize: 18,
-      fontWeight: "bold",
-      color: "#fff",
-      flexShrink: 1,
-      marginRight: 10,
-    },
-    taskListItemDate: {
-      fontSize: 12,
-      color: "#eee",
-    },
-    completedText: {
-      textDecorationLine: "line-through",
-      opacity: 0.7,
-    },
-    completedTick: {
-      marginLeft: 8,
-    },
-    taskTimelineTitleContainer: {
-      flexDirection: "row",
-      alignItems: "center",
-      flexShrink: 1,
-    },
-    taskListItemTitleContainer: {
-      flexDirection: "row",
-      alignItems: "center",
-      flexShrink: 1,
-      marginRight: 10,
-    },
-    customTimePickerContent: {
-      width: "90%",
-      backgroundColor: theme.surface,
-      borderRadius: 15,
-      height: "80%",
-      shadowColor: theme.shadow,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.25,
-      shadowRadius: 8,
-      elevation: 10,
-      flexDirection: "column",
-    },
-    timePickerColumns: {
-      flexDirection: "row",
-      justifyContent: "center",
-      alignItems: "center",
-      marginBottom: 20,
-      flex: 1,
-    },
-    timePickerColumn: {
-      flex: 1,
-      marginHorizontal: 5,
-      borderWidth: 1,
-      borderColor: theme.border,
-      borderRadius: 10,
-    },
-    timePickerAmPmColumn: {
-      justifyContent: "space-around",
-      marginHorizontal: 5,
-      borderWidth: 1,
-      borderColor: theme.border,
-      borderRadius: 10,
-      flex: 1,
-    },
-    timePickerItem: {
-      paddingVertical: 15,
-      alignItems: "center",
-    },
-    timePickerItemSelected: {
-      backgroundColor: theme.primary,
-      borderRadius: 8,
-      marginHorizontal: 5,
-    },
-    timePickerItemText: {
-      fontSize: 20,
-      color: theme.text,
-    },
-    timePickerItemTextSelected: {
-      fontWeight: "bold",
-      color: "#fff",
-    },
-    timePickerSeparator: {
-      fontSize: 24,
-      fontWeight: "bold",
-      color: theme.text,
-      marginHorizontal: 5,
-    },
-    timePickerSaveButton: {
-      backgroundColor: theme.primary,
-      paddingVertical: 12,
-      paddingHorizontal: 15,
-      borderRadius: 12,
-      marginTop: 10,
-      alignSelf: "stretch",
-    },
-    timePickerSaveButtonText: {
-      color: "#fff",
-      textAlign: "center",
-      fontSize: 16,
-      fontWeight: "bold",
-    },
-    moreModalContent: {
-      width: "90%",
-      backgroundColor: theme.surface,
-      borderRadius: 15,
-      padding: 20,
-      maxHeight: "85%",
-      shadowColor: theme.shadow,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.25,
-      shadowRadius: 8,
-      elevation: 10,
-    },
-    moreOptionButton: {
-      flexDirection: "row",
-      alignItems: "center",
-      paddingVertical: 15,
-      paddingHorizontal: 10,
-      borderRadius: 10,
-      marginBottom: 10,
-      backgroundColor: theme.card,
-    },
-    moreOptionButtonText: {
-      fontSize: 16,
-      color: theme.text,
-      marginLeft: 15,
-      fontWeight: "500",
-    },
-    moreOptionGroup: {
-      marginBottom: 10,
-      paddingVertical: 10,
-      paddingHorizontal: 10,
-      backgroundColor: theme.card,
-      borderRadius: 10,
-    },
-    moreOptionGroupTitle: {
-      fontSize: 14,
-      fontWeight: "bold",
-      color: theme.textSecondary,
-      marginBottom: 10,
-      marginLeft: 5,
-    },
-    moreOptionSubButton: {
-      paddingVertical: 12,
-      paddingHorizontal: 15,
-      borderRadius: 8,
-      marginBottom: 5,
-      backgroundColor: theme.background,
-    },
-    moreOptionSubButtonText: {
-      fontSize: 15,
-      color: theme.text,
-      marginLeft: 10,
-    },
-    logoutButton: {
-      backgroundColor: theme.danger,
-      marginTop: 20,
-      justifyContent: "center",
-    },
-    logoutButtonText: {
-      color: "#fff",
-      fontWeight: "bold",
-    },
-    loadingOverlay: {
-      flex: 1,
-      justifyContent: "center",
-      alignItems: "center",
-      backgroundColor: theme.background,
-    },
-    loadingText: {
-      marginTop: 10,
-      color: theme.text,
-      fontSize: 16,
-    },
-    permanentDeleteButton: {
-      backgroundColor: "#e98282ff", // Dark red for permanent delete
-      width: "100%",
-      marginTop: 10,
-      justifyContent: "center",
-    },
-  })
 
 export default MainScreen

@@ -1,0 +1,17 @@
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css";
+@import "nativewind/theme";
+
+/* Taskline design tokens -> usable as bg-brand, text-ink, bg-page, ... */
+@theme {
+  --color-brand: #0b6cf0;
+  --color-brand-dark: #0a55c8;
+  --color-hero: #0560c8;
+  --color-mint: #22b14c;
+  --color-ink: #0f1b3d;
+  --color-page: #eef4fc;
+  --color-night: #0b1220;
+  --color-night-card: #141c2e;
+  --color-night-row: #1b2438;
+}

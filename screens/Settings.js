@@ -11,15 +11,22 @@ import {
   Alert,
   Platform,
   ScrollView,
+  SafeAreaView,
 } from "react-native"
-import { SafeAreaView } from "react-native-safe-area-context"
 import DateTimePicker from "@react-native-community/datetimepicker"
 import AsyncStorage from "@react-native-async-storage/async-storage"
 import { db } from "../firebase/config"
 import { collection, addDoc, doc, setDoc, serverTimestamp } from "firebase/firestore"
-import { __DEV__ } from "react-native"
 import { useNavigation } from "@react-navigation/native"
 import { Ionicons } from "@expo/vector-icons"
+import {
+  resyncReminders,
+  requestPermission,
+  getPermissionStatus,
+  openSystemSettings,
+  sendTestNotification,
+  saveCustomReminderTime,
+} from "../utils/notifications"
 
 const reminderOptions = [
   "Whole day",
@@ -49,15 +56,13 @@ const Settings = ({ user, theme, darkMode, setDarkMode }) => {
     loadSettings()
   }, [])
 
-  const checkNotificationSupport = () => {
-    const isExpoGo =
-      __DEV__ &&
-      !Platform.select({
-        ios: false,
-        android: false,
-        default: true,
-      })
-    setNotificationsSupported(!isExpoGo)
+  const checkNotificationSupport = async () => {
+    try {
+      const status = await getPermissionStatus()
+      setNotificationsSupported(status.granted)
+    } catch (error) {
+      console.error("Failed to check notification permission:", error)
+    }
   }
 
   const loadSettings = async () => {
@@ -70,6 +75,13 @@ const Settings = ({ user, theme, darkMode, setDarkMode }) => {
       }
       if (savedReminderTime !== null) {
         setReminderTime(savedReminderTime)
+      }
+      const savedCustom = await AsyncStorage.getItem("customReminderTime")
+      if (savedCustom) {
+        const [h, m] = savedCustom.split(":").map(Number)
+        const d = new Date()
+        d.setHours(h, m, 0, 0)
+        setCustomTime(d)
       }
     } catch (error) {
       console.error("Failed to load settings:", error)
@@ -110,6 +122,12 @@ const Settings = ({ user, theme, darkMode, setDarkMode }) => {
     } catch (error) {
       console.error("Failed to save reminder preference:", error)
     }
+
+    if (newValue) {
+      const granted = await requestPermission()
+      setNotificationsSupported(granted)
+    }
+    resyncReminders()
   }
 
   const handleReminderTimeChange = async (option) => {
@@ -132,6 +150,8 @@ const Settings = ({ user, theme, darkMode, setDarkMode }) => {
     }
     if (option === "Custom") {
       setShowPicker(true)
+    } else {
+      resyncReminders()
     }
   }
 
@@ -158,22 +178,19 @@ const Settings = ({ user, theme, darkMode, setDarkMode }) => {
     }
   }
 
-  const scheduleNotification = async () => {
-    if (!notificationsSupported) {
-      Alert.alert(
-        "Notifications Not Available",
-        "Push notifications require a development build. This feature will work when you build your app for production.",
-      )
-      return
-    }
-    const now = new Date()
-    const diffMs = customTime.getTime() - now.getTime()
-    if (diffMs <= 0) {
-      Alert.alert("Invalid Time", "Please pick a time in the future.")
-      return
-    }
+  const scheduleNotification = async (time = customTime) => {
     try {
-      Alert.alert("Reminder Set", `Custom reminder would be scheduled for ${customTime.toLocaleTimeString()}`)
+      const granted = await requestPermission()
+      setNotificationsSupported(granted)
+      await saveCustomReminderTime(time)
+      await resyncReminders()
+      const label = time.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+      Alert.alert(
+        "Reminder Set",
+        granted
+          ? `You'll be reminded at ${label} on the day of each task.`
+          : `Saved ${label}, but notifications are turned off. Allow them to receive reminders.`,
+      )
     } catch (error) {
       console.error("Failed to schedule notification:", error)
       Alert.alert("Error", "Failed to schedule notification.")
@@ -187,7 +204,7 @@ const Settings = ({ user, theme, darkMode, setDarkMode }) => {
       setCustomTime(selectedDate)
 
       if (Platform.OS === "android") {
-        scheduleNotification()
+        scheduleNotification(selectedDate)
       }
     }
   }
@@ -264,12 +281,27 @@ const Settings = ({ user, theme, darkMode, setDarkMode }) => {
               />
             </View>
 
-            {/* Notification Support Warning */}
+            {/* Notification permission warning */}
             {remindersEnabled && !notificationsSupported && (
               <View style={styles.warningBox}>
                 <Text style={styles.warningText}>
-                  ⚠️ Push notifications require a development build and won't work in Expo Go.
+                  ⚠️ Notifications are turned off for Taskline, so you won't be reminded about your tasks.
                 </Text>
+                <TouchableOpacity
+                  style={styles.notifButton}
+                  onPress={async () => {
+                    const status = await getPermissionStatus()
+                    if (status.canAskAgain) {
+                      const granted = await requestPermission()
+                      setNotificationsSupported(granted)
+                      resyncReminders()
+                    } else {
+                      openSystemSettings()
+                    }
+                  }}
+                >
+                  <Text style={styles.notifButtonText}>Allow notifications</Text>
+                </TouchableOpacity>
               </View>
             )}
 
@@ -291,6 +323,22 @@ const Settings = ({ user, theme, darkMode, setDarkMode }) => {
                     </TouchableOpacity>
                   ))}
                 </View>
+                {reminderTime === "Custom" && (
+                  <Text style={styles.warningText}>
+                    Custom time: {customTime.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })}
+                    {"  "}(tap "Custom" to change)
+                  </Text>
+                )}
+                <TouchableOpacity
+                  style={styles.notifButtonOutline}
+                  onPress={async () => {
+                    const ok = await sendTestNotification()
+                    setNotificationsSupported(ok)
+                    Alert.alert(ok ? "Test sent" : "Notifications are off", ok ? "You'll get a notification in a few seconds." : "Allow notifications first.")
+                  }}
+                >
+                  <Text style={styles.notifButtonOutlineText}>Send test notification</Text>
+                </TouchableOpacity>
               </View>
             )}
           </View>
@@ -493,6 +541,29 @@ const createStyles = (theme) =>
       fontSize: 14,
       fontWeight: "500",
       lineHeight: 20,
+    },
+    notifButton: {
+      backgroundColor: theme.warning,
+      borderRadius: 10,
+      paddingVertical: 10,
+      alignItems: "center",
+      marginTop: 12,
+    },
+    notifButtonText: {
+      color: "#ffffff",
+      fontWeight: "700",
+    },
+    notifButtonOutline: {
+      borderColor: theme.primary,
+      borderWidth: 1,
+      borderRadius: 10,
+      paddingVertical: 10,
+      alignItems: "center",
+      marginTop: 16,
+    },
+    notifButtonOutlineText: {
+      color: theme.primary,
+      fontWeight: "700",
     },
     reminderSection: {
       marginTop: 20,
